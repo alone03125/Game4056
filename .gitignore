@@ -1,0 +1,19 @@
+# 依赖与构建产物（构建：npm run build）
+node_modules/
+dist/
+tools/.*.cjs
+
+# 本地工具配置
+.claude/
+
+# NoitaPixel 字体版权属于 Nolla Games、没有开源协议，不放进公开仓库。
+# 本地有这个字体时，npm run font 会生成合并字体，构建会自动使用；没有时构建只用 Fusion Pixel。
+assets/fonts/NoitaPixel.ttf
+assets/fonts/pixel4056.ttf
+userPrompt/NoitaPixel.ttf
+
+# 系统文件
+*.log
+.DS_Store
+Thumbs.db
+desktop.ini

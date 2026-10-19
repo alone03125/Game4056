@@ -1,0 +1,27 @@
+{
+  "name": "game4056",
+  "version": "4.0.0",
+  "private": true,
+  "description": "末日4056：俯视角 3D 类幸存者肉鸽网页游戏（支持局域网 1~4 人联机）",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --watch",
+    "serve": "node serve.mjs",
+    "typecheck": "tsc --noEmit",
+    "sim": "esbuild tools/sim.ts --bundle --platform=node --outfile=tools/.sim.cjs --log-level=warning && node tools/.sim.cjs",
+    "flowtest": "esbuild tools/flowtest.ts --bundle --platform=node --outfile=tools/.flowtest.cjs --log-level=warning && node tools/.flowtest.cjs",
+    "bosstest": "esbuild tools/bosstest.ts --bundle --platform=node --outfile=tools/.bosstest.cjs --log-level=warning && node tools/.bosstest.cjs",
+    "mptest": "esbuild tools/mptest.ts --bundle --platform=node --outfile=tools/.mptest.cjs --log-level=warning && node tools/.mptest.cjs",
+    "modtest": "esbuild tools/modtest.ts --bundle --platform=node --outfile=tools/.modtest.cjs --log-level=warning && node tools/.modtest.cjs",
+    "font": "python tools/merge-font.py"
+  },
+  "dependencies": {
+    "three": "0.170.0"
+  },
+  "devDependencies": {
+    "@types/three": "0.170.0",
+    "esbuild": "0.24.2",
+    "subset-font": "^2.9.0",
+    "typescript": "5.9.3"
+  }
+}
