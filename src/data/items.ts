@@ -103,8 +103,14 @@ export interface GoldStack {
   amount: number;
 }
 
+/** 奇物（第4.1次调整）：奇物宝箱掉落，捡起后所有玩家各自选择一个增益 */
+export interface RelicThing {
+  uid: number;
+  kind: 'relic';
+}
+
 export type BagItem = Gun | Bullet | Consumable;
-export type WorldThing = BagItem | GoldStack;
+export type WorldThing = BagItem | GoldStack | RelicThing;
 
 export function makeConsumable(id: ItemId, power = 0, grade = 0): Consumable {
   const c: Consumable = { uid: nextUid(), kind: 'item', id, power };
@@ -128,6 +134,7 @@ export function itemName(it: WorldThing): string {
   if (it.kind === 'gun') return `${it.model} ${it.name}`;
   if (it.kind === 'bullet') return BULLETS[it.def].name;
   if (it.kind === 'gold') return `${it.amount} 金币`;
+  if (it.kind === 'relic') return '奇物';
   return consumableName(it);
 }
 

@@ -6,6 +6,7 @@
 
 import type { Gun, GunLook } from '../data/guns';
 import type { WorldThing } from '../data/items';
+import type { RelicId } from '../data/relics';
 import type { Enemy, EnemyShot } from './enemies';
 import type { WorldItem } from './pickups';
 import type { Proj } from './projectiles';
@@ -72,6 +73,7 @@ export interface RemoteProfile {
   bank: number;
   bagUsed: number;
   bagCap: number;
+  relics: RelicId[]; // 第4.1次调整：拥有的奇物
 }
 
 export interface NetHooks {
@@ -80,8 +82,8 @@ export interface NetHooks {
   /** 当前存活（未阵亡）的玩家数量，用于丧尸 / 牢大的生命值倍率 */
   aliveCount(): number;
   remotes(): Iterable<RemotePlayer>;
-  /** 主机：丧尸的接触攻击命中了远程玩家 */
-  hitRemote(id: number, dmg: number, sx: number, sy: number, kx: number, ky: number): void;
+  /** 第4.1次调整：本地玩家受到伤害（碰撞伤害由被打的人本地判定）；src = 造成伤害的敌人编号（没有时为 -1） */
+  hurt(src: number, dmg: number): void;
   /** 主机：敌人死亡（附击杀者，用于金币分配） */
   enemyKilled(e: Enemy, gold: number, by: number): void;
   /** 主机：敌方投射物（口水 / 石块） */
@@ -109,9 +111,17 @@ export interface NetHooks {
   fx(kind: string, args: (string | number)[]): void;
   /** 生成联机唯一的地面物品编号 */
   newItemUid(): number;
+  /** 第4.1次调整：区域任务——非房主点燃可燃物堆 / 踢动物资球，交给房主结算 */
+  questIgnite(i: number): void;
+  questKick(i: number, x: number, y: number, vx: number, vy: number): void;
+  /** 第4.1次调整：房主——超级防护服把所有玩家的辐射平分 */
+  radAvg(v: number): void;
 }
 
 /** 伤害事件的标记位 */
 export const DMG_BURN = 1;
 export const DMG_SLOW = 2;
 export const DMG_GOLD = 4;
+export const DMG_CORRODE = 8; // 第4.1次调整：腐蚀疗法
+export const DMG_EXEC = 16; // 要害一击：直接击杀
+export const DMG_PRE = 32; // 伤害已在本地计算过腐蚀加成

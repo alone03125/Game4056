@@ -1,26 +1,56 @@
 // 敌人：生成（个体生成 + 类型判别两层逻辑）、AI（全图流场追踪）、受伤与死亡。
+// 第4.1次调整：
+// - 联机时的碰撞伤害改为由被打的玩家本地判定（见 updateMirror），受伤后通知房主，房主再同步给所有人；
+// - 奇物宝箱（type = 'chest'）也是一种“敌人”：不会移动和攻击，被打破后掉落奇物；
+// - 异变体（区域任务）：普通丧尸的强化版，带有虹彩特效。
 
 import {
   ENEMIES, ENEMY_SPEED_SCALE, ENEMY_TYPES, ELITE_MUL, EnemyType, enhanceCoef, DIFFICULTY, BOSS, MAMBA, CREEPER,
-  COOP, COOP_BOSS_HP_MUL, COOP_COUNT_MUL, COOP_HP_MUL,
+  COOP, COOP_BOSS_HP_MUL, COOP_COUNT_MUL, COOP_HP_MUL, MUTANT, CHEST_R, ZoneCfg, Difficulty,
 } from '../config';
 import { SpatialHash } from '../util/spatial';
 import { clamp, damp, wrapAngle } from '../util/math';
 import { globalRng } from '../util/rng';
 import type { World } from './world';
 import { randomBullet } from '../data/bullets';
-import { DMG_BURN, DMG_GOLD, DMG_SLOW, Target } from './net';
+import { ITEM_IDS, ITEMS } from '../data/items';
+import { RELIC } from '../data/relics';
+import { DMG_BURN, DMG_CORRODE, DMG_EXEC, DMG_GOLD, DMG_PRE, DMG_SLOW, Target } from './net';
 
 /** 伤害来源附带的效果 */
 export interface DmgSrc {
   gold?: boolean;
   burnDps?: number;
   slow?: boolean;
+  corrode?: boolean; // 腐蚀疗法：3 秒内受到的伤害 +40%
+  execute?: boolean; // 要害一击：暴击直接击杀普通丧尸
+  pre?: boolean; // 联机：伤害已经计算过腐蚀加成
+}
+
+/** 招财弹：每名玩家每个区域最多触发 4 次必定掉落道具（第4.1次调整） */
+export const GOLD_DROP_MAX = 4;
+
+/** 敌人的攻击力（房主与镜像端用同一个公式计算，镜像端用于本地判定碰撞伤害） */
+export function enemyAtk(type: EnemyType, elite: number, cfg: ZoneCfg, diff: Difficulty, mutant: boolean): number {
+  return ENEMIES[type].atk * cfg.dmgMul * ELITE_MUL[elite] * DIFFICULTY[diff].dmg * (mutant ? MUTANT.atk : 1);
+}
+
+export function creeperBoomDmg(elite: number, cfg: ZoneCfg, diff: Difficulty): number {
+  return CREEPER.boom * cfg.dmgMul * ELITE_MUL[elite] * DIFFICULTY[diff].dmg;
+}
+
+export function creeperRadius(elite: number): number {
+  return CREEPER.radius * (elite ? 1.15 : 1);
+}
+
+/** 要害一击可以直接击杀的“普通丧尸”：非精英、非异变体、非苦力怕、非 Boss、非宝箱 */
+export function isNormalZombie(e: Enemy): boolean {
+  return !e.elite && !e.mutant && (e.type === 'office' || e.type === 'iron' || e.type === 'runner' || e.type === 'spitter');
 }
 
 export interface Enemy {
   id: number;
-  type: EnemyType | 'boss';
+  type: EnemyType | 'boss' | 'chest';
   dead: boolean;
   x: number;
   y: number;
@@ -70,9 +100,11 @@ export interface Enemy {
   fuse: number; // 第4次调整：苦力怕的爆炸倒计时（< 0 表示未触发）
   fuseKill: boolean; // 苦力怕是被打死后才开始倒计时（决定金币）
   boom: number; // 苦力怕爆炸对玩家的伤害
+  mutant: boolean; // 第4.1次调整：异变体
+  corrodeT: number; // 第4.1次调整：腐蚀（受到的伤害 +40%）
 }
 
-export const TYPE_CODE: (EnemyType | 'boss')[] = ['office', 'iron', 'runner', 'spitter', 'boss', 'creeper'];
+export const TYPE_CODE: (EnemyType | 'boss' | 'chest')[] = ['office', 'iron', 'runner', 'spitter', 'boss', 'creeper', 'chest'];
 
 export interface EnemyShot {
   x: number;
@@ -114,6 +146,11 @@ export class Enemies {
   /** 非主机：id → 镜像敌人 */
   byId = new Map<number, Enemy>();
   private mirrorSeen = new Set<number>();
+  /** 招财弹在本区已触发的次数（按玩家） */
+  goldDrops = new Map<number, number>();
+  /** 黑曜羽毛：累计造成伤害的次数 */
+  private featherN = 0;
+  private procing = false;
 
   constructor(private w: World) {}
 
@@ -124,6 +161,7 @@ export class Enemies {
     this.shots = [];
     this.eliteCount = 0;
     this.spawnAcc = 0;
+    this.goldDrops.clear();
     const b = this.w.layout.bounds;
     this.hash.setBounds(b.x0, b.y0, b.x1, b.y1);
   }
@@ -136,7 +174,7 @@ export class Enemies {
       speed: 1, atk: 1, gold: 1, elite: 0, hitCd: 0, flash: 0, slowT: 0, burnT: 0, burnDps: 0, burnTick: 0, phase: 0,
       face: 0, spitCd: 0, dmgAcc: 0, dmgTimer: 0, goldBonus: false, age: 0, strafe: 1, stuckT: 0, lastX: 0, lastY: 0, recycle: true, windup: 0,
       lastBy: 0, burnBy: 0, sx: 0, sy: 0, svx: 0, svy: 0, sface: 0, stime: 0, shp: 1, predT: 0,
-      stunT: 0, fuse: -1, fuseKill: false, boom: 0,
+      stunT: 0, fuse: -1, fuseKill: false, boom: 0, mutant: false, corrodeT: 0,
     };
   }
 
@@ -151,7 +189,7 @@ export class Enemies {
     const counts: Record<EnemyType, number> = { office: 0, iron: 0, runner: 0, spitter: 0, creeper: 0 };
     if (!ignoreNeighbors) {
       this.hash.queryRadius(x, y, 12, (e) => {
-        if (e.type !== 'boss') counts[e.type]++;
+        if (e.type !== 'boss' && e.type !== 'chest') counts[e.type]++;
       });
     }
     const entries = ENEMY_TYPES.map((t) => [t, cfg.weights[t] * Math.pow(0.72, counts[t])] as const);
@@ -190,7 +228,7 @@ export class Enemies {
     e.maxHp = def.hp * globalRng.range(cfg.hpMul[0], cfg.hpMul[1]) * coef * diff.hp * COOP_HP_MUL[this.coopN()];
     e.hp = e.maxHp;
     e.speed = def.speed * ENEMY_SPEED_SCALE * coef * globalRng.range(0.92, 1.08);
-    e.atk = def.atk * cfg.dmgMul * ELITE_MUL[elite] * diff.dmg;
+    e.atk = enemyAtk(type, elite, cfg, w.run.difficulty, false);
     // 金币基础值 × 变异倍率；第3次调整：不再乘以区域值，改为在死亡时乘以当时的强化系数（见 deathFx）
     e.gold = def.gold * ELITE_MUL[elite];
     e.hitCd = 0.3; e.flash = 0; e.slowT = 0; e.burnT = 0; e.burnDps = 0; e.burnTick = 0;
@@ -204,8 +242,39 @@ export class Enemies {
     e.windup = 0;
     e.lastBy = this.w.myId; e.burnBy = this.w.myId; e.predT = 0;
     e.stunT = 0; e.fuse = -1; e.fuseKill = false;
-    e.boom = CREEPER.boom * cfg.dmgMul * ELITE_MUL[elite] * diff.dmg;
+    e.boom = creeperBoomDmg(elite, cfg, w.run.difficulty);
+    e.mutant = false; e.corrodeT = 0;
     if (elite) this.eliteCount++;
+    this.list.push(e);
+    this.byId.set(e.id, e);
+    return e;
+  }
+
+  /** 异变体（第4.1次调整）：生命 ×24、攻击 ×4（与其他加成叠加）、移速 ×0.8，不会被回收 */
+  makeMutant(e: Enemy): void {
+    e.mutant = true;
+    e.maxHp *= MUTANT.hp;
+    e.hp = e.maxHp;
+    e.atk *= MUTANT.atk;
+    e.speed *= MUTANT.speed;
+    e.gold *= MUTANT.gold;
+    e.recycle = false;
+  }
+
+  /** 奇物宝箱（第4.1次调整）：不会移动和攻击，被打破后掉落奇物 */
+  spawnChest(x: number, y: number, hp: number): Enemy {
+    const e = this.alloc();
+    e.id = this.nextId++;
+    e.type = 'chest';
+    e.dead = false;
+    e.x = x; e.y = y; e.vx = 0; e.vy = 0; e.kx = 0; e.ky = 0;
+    e.elite = 0; e.r = CHEST_R; e.mass = 999;
+    e.maxHp = hp; e.hp = hp; e.speed = 0; e.atk = 0; e.gold = 0;
+    e.hitCd = 0; e.flash = 0; e.slowT = 0; e.burnT = 0; e.burnDps = 0; e.burnTick = 0;
+    e.phase = 0; e.face = 0; e.spitCd = 0; e.dmgAcc = 0; e.dmgTimer = 0; e.goldBonus = false; e.age = 0;
+    e.strafe = 1; e.stuckT = 0; e.lastX = x; e.lastY = y; e.recycle = false; e.windup = 0;
+    e.lastBy = this.w.myId; e.burnBy = this.w.myId; e.predT = 0;
+    e.stunT = 0; e.fuse = -1; e.fuseKill = false; e.boom = 0; e.mutant = false; e.corrodeT = 0;
     this.list.push(e);
     this.byId.set(e.id, e);
     return e;
@@ -241,7 +310,7 @@ export class Enemies {
     e.phase = 0; e.face = -Math.PI / 2; e.spitCd = 0; e.dmgAcc = 0; e.dmgTimer = 0; e.goldBonus = false; e.age = 0;
     e.strafe = 1; e.stuckT = 0; e.lastX = x; e.lastY = y;
     e.lastBy = this.w.myId; e.burnBy = this.w.myId; e.predT = 0; e.windup = 0; e.recycle = false;
-    e.stunT = 0; e.fuse = -1; e.fuseKill = false; e.boom = 0;
+    e.stunT = 0; e.fuse = -1; e.fuseKill = false; e.boom = 0; e.mutant = false; e.corrodeT = 0;
     this.list.push(e);
     this.byId.set(e.id, e);
     return e;
@@ -379,6 +448,7 @@ export class Enemies {
       if (e.hitCd > 0) e.hitCd -= dt;
       if (e.flash > 0) e.flash -= dt;
       if (e.slowT > 0) e.slowT -= dt;
+      if (e.corrodeT > 0) e.corrodeT -= dt;
       this.tickNumbers(e, dt);
       // 燃烧
       if (e.burnT > 0) {
@@ -392,6 +462,7 @@ export class Enemies {
         }
       }
       if (e.type === 'boss') { w.boss?.updateAI(e, dt); continue; }
+      if (e.type === 'chest') continue;
       if (e.stunT > 0) e.stunT -= dt;
       // 苦力怕：倒计时结束时爆炸
       if (e.fuse >= 0) {
@@ -502,13 +573,11 @@ export class Enemies {
           e.y -= (dy / d) * push;
         }
         if (e.stunT <= 0) e.windup += dt;
-        if (e.hitCd <= 0 && e.windup >= 0.3 && active && e.stunT <= 0) {
+        // 第4.1次调整：远程玩家由其本人判定碰撞伤害（见 updateMirror），房主只结算自己
+        if (t.local && e.hitCd <= 0 && e.windup >= 0.3 && active && e.stunT <= 0) {
           e.hitCd = 1.2;
           e.windup = 0;
-          const kx = (dx / d) * 5, ky = (dy / d) * 5;
-          if (t.local) {
-            if (w.damagePlayer(e.atk, e.x, e.y)) { w.player.kx += kx; w.player.ky += ky; }
-          } else w.net?.hitRemote(t.id, e.atk, e.x, e.y, kx, ky);
+          if (w.damagePlayer(e.atk, e.x, e.y, e.id)) { w.player.kx += (dx / d) * 5; w.player.ky += (dy / d) * 5; }
         }
       } else if (e.windup > 0) e.windup = Math.max(0, e.windup - dt * 2);
     }
@@ -545,11 +614,15 @@ export class Enemies {
   private updateMirror(dt: number): void {
     const w = this.w;
     const now = w.time;
+    const p = w.player;
+    const canHit = w.localTargetable() && w.phaseActive();
     for (const e of this.list) {
       if (e.flash > 0) e.flash -= dt;
       if (e.slowT > 0) e.slowT -= dt;
       if (e.burnT > 0) e.burnT -= dt;
       if (e.stunT > 0) e.stunT -= dt;
+      if (e.hitCd > 0) e.hitCd -= dt;
+      if (e.corrodeT > 0) e.corrodeT -= dt;
       if (e.fuse >= 0) { e.fuse = Math.max(0, e.fuse - dt); e.flash = Math.sin(e.fuse * 18) > 0.2 ? 0.1 : 0; }
       this.tickNumbers(e, dt);
       if (e.predT > 0) {
@@ -565,6 +638,18 @@ export class Enemies {
       e.vx = e.svx; e.vy = e.svy;
       e.face += wrapAngle(e.sface - e.face) * damp(10, dt);
       e.phase += dt * (2 + Math.hypot(e.vx, e.vy) * (e.type === 'boss' ? 1.6 : 2.6));
+      // 第4.1次调整：碰撞伤害由自己本地判定（看到的就是打到的），之后通知房主
+      if (e.type === 'boss' || e.type === 'chest' || e.dead) continue;
+      const ux = p.x - e.x, uy = p.y - e.y;
+      const d = Math.hypot(ux, uy) || 0.001;
+      if (canHit && d < e.r + p.r + 0.15 && e.stunT <= 0) {
+        e.windup += dt;
+        if (e.hitCd <= 0 && e.windup >= 0.3) {
+          e.hitCd = 1.2;
+          e.windup = 0;
+          if (w.damagePlayer(e.atk, e.x, e.y, e.id)) { p.kx += (ux / d) * 5; p.ky += (uy / d) * 5; }
+        }
+      } else if (e.windup > 0) e.windup = Math.max(0, e.windup - dt * 2);
     }
     this.hash.rebuild(this.list);
     this.groan(dt);
@@ -584,11 +669,23 @@ export class Enemies {
       e.id = id; e.type = type; e.dead = false;
       e.x = x; e.y = y; e.kx = 0; e.ky = 0;
       e.elite = flags & 3;
-      if (type === 'boss') { const mb = w.layout.index >= 6; e.r = mb ? MAMBA.radius : BOSS.radius; e.mass = mb ? 60 : 40; }
-      else { const def = ENEMIES[type]; e.r = def.radius * (e.elite ? 1.12 : 1); e.mass = def.mass * (e.elite ? 1.3 : 1); }
+      e.mutant = !!(flags & 64);
+      const cfg = w.layout.cfg, diff = w.run.difficulty;
+      e.atk = 0; e.boom = 0;
+      if (type === 'boss') {
+        const mb = w.layout.index >= 6;
+        e.r = mb ? MAMBA.radius : BOSS.radius; e.mass = mb ? 60 : 40;
+        e.atk = (mb ? MAMBA.atk : BOSS.atk) * DIFFICULTY[diff].dmg;
+      } else if (type === 'chest') { e.r = CHEST_R; e.mass = 999; }
+      else {
+        const def = ENEMIES[type];
+        e.r = def.radius * (e.elite ? 1.12 : 1); e.mass = def.mass * (e.elite ? 1.3 : 1);
+        e.atk = enemyAtk(type, e.elite, cfg, diff, e.mutant);
+        e.boom = creeperBoomDmg(e.elite, cfg, diff);
+      }
       e.hp = hp; e.maxHp = maxHp; e.flash = 0; e.slowT = 0; e.burnT = 0; e.predT = 0; e.stunT = 0; e.fuse = -1;
       e.phase = globalRng.range(0, 6.28); e.face = face; e.dmgAcc = 0; e.dmgTimer = 0;
-      e.lastBy = -1; e.burnBy = -1; e.atk = 0; e.gold = 0;
+      e.lastBy = -1; e.burnBy = -1; e.gold = 0; e.hitCd = 0.3; e.windup = 0; e.corrodeT = 0;
       this.byId.set(id, e);
       this.list.push(e);
       if (type === 'boss') w.onBossMirror(e);
@@ -600,6 +697,7 @@ export class Enemies {
     if (flags & 4) e.burnT = Math.max(e.burnT, 0.3);
     if (flags & 8) e.slowT = Math.max(e.slowT, 0.3);
     if (flags & 32) e.stunT = Math.max(e.stunT, 0.3);
+    if (flags & 128) e.corrodeT = Math.max(e.corrodeT, 0.3);
     // 苦力怕的倒计时：房主只发送“已点燃”，镜像端自己计时
     if (flags & 16) { if (e.fuse < 0) e.fuse = CREEPER.fuse; } else e.fuse = -1;
     this.mirrorSeen.add(id);
@@ -631,7 +729,30 @@ export class Enemies {
     }
     const type = TYPE_CODE[tcode] ?? 'office';
     if (type === 'boss') return;
+    if (type === 'chest') { this.chestFx(x, y); return; }
+    // 第4.1次调整：苦力怕的爆炸由自己本地判定是否被炸到
+    if (type === 'creeper') this.localBoom(x, y, elite);
     this.deathFx(type, x, y, face, elite, by, gold);
+  }
+
+  /** 苦力怕爆炸波及本地玩家 */
+  private localBoom(x: number, y: number, elite: number): void {
+    const w = this.w;
+    const p = w.player;
+    if (!w.localTargetable() || !w.phaseActive()) return;
+    const dx = p.x - x, dy = p.y - y;
+    const d = Math.hypot(dx, dy) || 0.01;
+    if (d > creeperRadius(elite) + p.r) return;
+    if (w.damagePlayer(creeperBoomDmg(elite, w.layout.cfg, w.run.difficulty), x, y)) { p.kx += (dx / d) * 10; p.ky += (dy / d) * 10; }
+  }
+
+  /** 奇物宝箱被打破 */
+  private chestFx(x: number, y: number): void {
+    const w = this.w;
+    w.fx.explosion(x, y, 2.4, 0xffd24a);
+    w.fx.sparks(x, y, 0xffe08a, 24, 7);
+    w.fx.sound('explosion', x, y, 0.7);
+    w.fx.shake(0.5);
   }
 
   /** 死亡表现与金币：击杀者获得全部金币，其他玩家获得 25%（第2版联机） */
@@ -651,7 +772,8 @@ export class Enemies {
       w.fx.decal(x, y, 0x101410, CREEPER.radius * 1.2);
     } else if (w.corpses.length < 160) w.corpses.push({ type, x, y, face, t: 0, elite, side: globalRng.sign() });
     // 第3次调整：金币 = 基础 × 变异倍率 × 强化系数（log10(辐射值) - 0.5，按自己当前的辐射值计算）
-    const total = Math.max(1, Math.round(gold * enhanceCoef(w.run.rad)));
+    // 第4.1次调整：老古董——自己击杀的敌人金币 +100%
+    const total = Math.max(1, Math.round(gold * enhanceCoef(w.run.rad) * (mine && w.run.has('antique') ? RELIC.antiqueGold : 1)));
     const share = mine ? total : Math.round(total * COOP.goldShare);
     if (share > 0 && w.player.alive) w.pickups.dropGold(x, y, share);
     if (type === 'creeper') return;
@@ -723,6 +845,10 @@ export class Enemies {
     if (e.type === 'creeper' && e.fuseKill) return false;
     const who = by ?? w.myId;
     const mine = who === w.myId;
+    // 第4.1次调整：腐蚀（受到的伤害 +40%，这一击本身不算）；要害一击直接击杀普通丧尸
+    if (e.corrodeT > 0 && !src?.pre) amount *= RELIC.corrodeMul;
+    if (src?.execute) amount = Math.max(amount, e.hp);
+    if (src?.corrode) e.corrodeT = RELIC.corrodeTime;
     const dealt = Math.min(e.hp, amount);
     if (mine) {
       w.run.stats.damageDealt += dealt;
@@ -737,10 +863,12 @@ export class Enemies {
     e.flash = 0.08;
     if (src?.burnDps) { e.burnT = 3; e.burnDps = Math.max(e.burnDps, src.burnDps); e.burnBy = who; if (e.burnTick <= 0) e.burnTick = 0.5; }
     if (src?.slow) e.slowT = 2.5;
+    if (mine) this.relicProcs(e);
     // 非主机：本地预判，交给主机结算
     if (!w.isAuthority) {
       e.hp -= amount;
-      const flags = (src?.burnDps ? DMG_BURN : 0) | (src?.slow ? DMG_SLOW : 0) | (src?.gold ? DMG_GOLD : 0);
+      const flags = (src?.burnDps ? DMG_BURN : 0) | (src?.slow ? DMG_SLOW : 0) | (src?.gold ? DMG_GOLD : 0)
+        | (src?.corrode ? DMG_CORRODE : 0) | (src?.execute ? DMG_EXEC : 0) | DMG_PRE;
       w.net!.enemyDamage(e, amount, flags, src?.burnDps ?? 0);
       // 苦力怕被打死后还会倒计时 2 秒再爆炸，不做“预判死亡”
       if (e.hp <= 0 && e.type !== 'creeper') { e.dead = true; e.predT = 0.6; }
@@ -777,19 +905,16 @@ export class Enemies {
   private creeperBoom(e: Enemy): void {
     const w = this.w;
     if (e.dead) return;
-    const R = CREEPER.radius * (e.elite ? 1.15 : 1);
+    const R = creeperRadius(e.elite);
     e.dead = true;
     if (e.elite) this.eliteCount--;
     // 玩家（本地直接结算，远程玩家发送命中消息）
-    if (w.phaseActive()) {
-      for (const t of w.targets) {
-        const dx = t.x - e.x, dy = t.y - e.y;
-        const d = Math.hypot(dx, dy) || 0.01;
-        if (d > R + t.r) continue;
-        const kx = (dx / d) * 10, ky = (dy / d) * 10;
-        if (t.local) { if (w.damagePlayer(e.boom, e.x, e.y)) { w.player.kx += kx; w.player.ky += ky; } }
-        else w.net?.hitRemote(t.id, e.boom, e.x, e.y, kx, ky);
-      }
+    // 第4.1次调整：远程玩家收到击杀消息后自己判定是否被炸到（见 remoteKill）
+    if (w.phaseActive() && w.localTargetable()) {
+      const p = w.player;
+      const dx = p.x - e.x, dy = p.y - e.y;
+      const d = Math.hypot(dx, dy) || 0.01;
+      if (d <= R + p.r && w.damagePlayer(e.boom, e.x, e.y)) { p.kx += (dx / d) * 10; p.ky += (dy / d) * 10; }
     }
     // 殃及丧尸：伤害为对玩家的 5 倍，记在引爆者名下
     const by = e.lastBy;
@@ -804,15 +929,45 @@ export class Enemies {
     });
     // 金币：被打死的 34，靠近触发的 17（再乘变异倍率；强化系数在 deathFx 里乘）
     const base = e.fuseKill ? ENEMIES.creeper.gold : CREEPER.nearGold;
-    let gold = base * ELITE_MUL[e.elite] * (e.goldBonus ? 1.6 : 1);
+    let gold = base * ELITE_MUL[e.elite];
     gold = Math.max(1, Math.round(gold * globalRng.range(0.9, 1.1)));
     w.net?.enemyKilled(e, gold, by);
     this.deathFx('creeper', e.x, e.y, e.face, e.elite, by, gold);
+    if (e.goldBonus) this.goldDrop(e, by);
+  }
+
+  /** 招财弹（第4.1次调整）：被招财弹击杀的丧尸必定掉落一件随机道具（权重与地图道具相同），每名玩家每区最多 4 次 */
+  private goldDrop(e: Enemy, by: number): void {
+    const w = this.w;
+    const n = this.goldDrops.get(by) ?? 0;
+    if (n >= GOLD_DROP_MAX) return;
+    this.goldDrops.set(by, n + 1);
+    const cfg = w.layout.cfg;
+    const id = globalRng.weighted(ITEM_IDS.map((k) => [k, ITEMS[k].weight] as const));
+    const thing = w.pickups.makeItem(id, globalRng, cfg.index, cfg.gunRarityW, cfg.purify);
+    w.pickups.dropThing(thing, e.x, e.y, true);
+    w.fxAll('sound', 'pickupBig', e.x, e.y, 0.5);
+  }
+
+  /** 金刀 / 黑曜羽毛：自己造成伤害时触发（金刀的追加伤害不会再次触发） */
+  private relicProcs(e: Enemy): void {
+    if (this.procing) return;
+    const w = this.w, run = w.run;
+    if (run.has('feather') && ++this.featherN >= RELIC.featherHits) {
+      this.featherN = 0;
+      w.healPlayer(RELIC.featherHeal);
+    }
+    if (run.has('golden') && globalRng.chance(RELIC.goldenChance)) {
+      this.procing = true;
+      w.fx.sparks(e.x, e.y, 0xffd24a, 8, 5);
+      this.damage(e, RELIC.goldenDmg, null, '#ffd24a');
+      this.procing = false;
+    }
   }
 
   /** 晕眩（黄油）：Boss 免疫；非房主把晕眩交给房主结算 */
   applyStun(e: Enemy, t: number): void {
-    if (e.dead || e.type === 'boss') return;
+    if (e.dead || e.type === 'boss' || e.type === 'chest') return;
     e.stunT = Math.max(e.stunT, t);
     if (!this.w.isAuthority) this.w.net?.enemyStun(e, t);
   }
@@ -820,7 +975,7 @@ export class Enemies {
   /** 房主：其他玩家造成的晕眩 */
   applyRemoteStun(id: number, t: number): void {
     const e = this.byId.get(id);
-    if (!e || e.dead || e.type === 'boss') return;
+    if (!e || e.dead || e.type === 'boss' || e.type === 'chest') return;
     e.stunT = Math.max(e.stunT, t);
   }
 
@@ -832,11 +987,14 @@ export class Enemies {
     e.dmgAcc = 0;
     if (e.elite) this.eliteCount--;
     if (e.type === 'boss') { w.net?.enemyKilled(e, 0, e.lastBy); w.onBossKilled(e); return; }
-    // 金币掉落 = 基础 × 变异倍率（× 招财弹加成）；强化系数在 deathFx 里按各玩家自己的辐射值相乘
-    let gold = e.gold * (e.goldBonus ? 1.6 : 1);
+    if (e.type === 'chest') { w.net?.enemyKilled(e, 0, e.lastBy); this.chestFx(e.x, e.y); w.quests.onChestBroken(e); return; }
+    if (e.mutant) w.quests.onMutantKilled(e);
+    // 金币掉落 = 基础 × 变异倍率；强化系数在 deathFx 里按各玩家自己的辐射值相乘
+    let gold = e.gold;
     gold = Math.max(1, Math.round(gold * globalRng.range(0.9, 1.1)));
     w.net?.enemyKilled(e, gold, e.lastBy);
     this.deathFx(e.type, e.x, e.y, e.face, e.elite, e.lastBy, gold);
+    if (e.goldBonus) this.goldDrop(e, e.lastBy);
     // 精英有概率掉落子弹（自定）
     if (e.elite > 0) {
       const ch = [0, 0.05, 0.12, 0.25][e.elite];
@@ -845,7 +1003,7 @@ export class Enemies {
     // 燃烧传染
     if (e.burnT > 0) {
       this.hash.queryRadius(e.x, e.y, 1.9, (o) => {
-        if (o === e || o.type === 'boss') return;
+        if (o === e || o.type === 'boss' || o.type === 'chest') return;
         o.burnT = 3;
         o.burnDps = Math.max(o.burnDps, e.burnDps * 0.8);
         o.burnBy = e.burnBy;
@@ -871,10 +1029,11 @@ export class Enemies {
     this.eliteCount = 0;
   }
 
+  /** 最近的敌人（不含奇物宝箱：追踪、电弧、奇物的箭都不会去找宝箱） */
   nearest(x: number, y: number, maxR: number, exclude?: (e: Enemy) => boolean): Enemy | null {
     let best: Enemy | null = null, bd = maxR * maxR;
     this.hash.queryRadius(x, y, maxR, (e, d2) => {
-      if (e.dead || (exclude && exclude(e))) return;
+      if (e.dead || e.type === 'chest' || (exclude && exclude(e))) return;
       if (d2 < bd) { bd = d2; best = e; }
     });
     return best;
@@ -891,7 +1050,18 @@ export class Enemies {
   applyRemote(id: number, amount: number, flags: number, burnDps: number, by: number): void {
     const e = this.byId.get(id);
     if (!e || e.dead) return;
-    this.damage(e, amount, { gold: !!(flags & DMG_GOLD), burnDps: flags & DMG_BURN ? burnDps : 0, slow: !!(flags & DMG_SLOW) }, undefined, by);
+    this.damage(e, amount, {
+      gold: !!(flags & DMG_GOLD), burnDps: flags & DMG_BURN ? burnDps : 0, slow: !!(flags & DMG_SLOW),
+      corrode: !!(flags & DMG_CORRODE), execute: !!(flags & DMG_EXEC), pre: !!(flags & DMG_PRE),
+    }, undefined, by);
+  }
+
+  /** 房主：远程玩家本地判定被某个丧尸撞到后，这个丧尸进入出手冷却 */
+  onRemoteHurt(id: number): void {
+    const e = this.byId.get(id);
+    if (!e || e.dead) return;
+    e.hitCd = Math.max(e.hitCd, 1.2);
+    e.windup = 0;
   }
 
   applyRemoteKnock(id: number, kx: number, ky: number): void {

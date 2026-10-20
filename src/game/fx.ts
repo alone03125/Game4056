@@ -20,6 +20,8 @@ export interface Fx {
   arcs(points: number[]): void; // x0,y0,x1,y1,...
   damageNumber(x: number, y: number, amount: number, color: string, big?: boolean): void;
   floatText(x: number, y: number, text: string, color: string): void;
+  /** 第4.1次调整：拾取金币的跳字（1 秒内的金币合并成一个） */
+  goldText(x: number, y: number, amount: number): void;
   decal(x: number, y: number, color: number, size: number): void;
   shake(amount: number): void;
   playerHurt(amount: number): void;
@@ -32,5 +34,5 @@ export interface Fx {
 /** 空实现（用于无头测试） */
 export const nullFx: Fx = {
   shoot() {}, remoteShot() {}, sound() {}, sparks() {}, blood() {}, explosion() {}, smoke() {}, arcs() {}, damageNumber() {},
-  floatText() {}, decal() {}, shake() {}, playerHurt() {}, toast() {}, bagFlash() {}, banner() {}, muzzle() {},
+  floatText() {}, goldText() {}, decal() {}, shake() {}, playerHurt() {}, toast() {}, bagFlash() {}, banner() {}, muzzle() {},
 };

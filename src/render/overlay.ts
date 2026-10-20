@@ -49,6 +49,24 @@ export class Overlay {
     this.floaters.push({ x, y, h: 2.6, text, color, t: 0, life: 1.4, big: true, dx: 0 });
   }
 
+  /** 第4.1次调整：1 秒内拾取的金币合并成一个跳字（数值累加，跳字跟着玩家） */
+  private gold: { f: Floater; amount: number; born: number } | null = null;
+  goldText(x: number, y: number, amount: number): void {
+    const now = performance.now() / 1000;
+    const g = this.gold;
+    if (g && now - g.born < 1 && this.floaters.includes(g.f)) {
+      g.amount += amount;
+      g.f.text = `+${g.amount}`;
+      g.f.x = x; g.f.y = y;
+      g.f.t = Math.min(g.f.t, 0.1);
+      return;
+    }
+    if (this.floaters.length > 160) this.floaters.shift();
+    const f: Floater = { x, y, h: 2.6, text: `+${amount}`, color: '#ffd24a', t: 0, life: 1.4, big: true, dx: 0 };
+    this.floaters.push(f);
+    this.gold = { f, amount, born: now };
+  }
+
   clear(): void {
     this.floaters = [];
   }

@@ -1,15 +1,20 @@
 // 玩家实体：移动、双枪射击循环、后坐力（减速 / 太空步 / 冲力）、受伤与增益。
 
-import { PLAYER, RECOIL } from '../config';
-import { Bullet, BULLETS, mysteryBullet, recoilOf } from '../data/bullets';
+import { GUN_LIMITS, PLAYER, RECOIL } from '../config';
+import { Bullet, BULLETS, CastMods, mysteryBullet, recoilOf } from '../data/bullets';
 import { globalRng } from '../util/rng';
-import { Gun, GunStats, gunSpeedMod, gunStats } from '../data/guns';
-import type { CastMods } from './projectiles';
+import { castOnce, Gun, GunStats, gunSpeedMod } from '../data/guns';
+import { RELIC } from '../data/relics';
 import { damp, wrapAngle } from '../util/math';
 import type { World } from './world';
 
+/** 盲盒在发射的瞬间随机变成其他任意子弹（数值也随机浮动） */
+const resolveMystery = (b: Bullet): Bullet => (BULLETS[b.def].flags?.mystery ? mysteryBullet(globalRng) : b);
+
 export interface HandState {
   cursor: number; // 下一发子弹的槽位
+  loops: Bullet[]; // 第4.1次调整：循环模块登记的子弹（本轮之后每一发都会带上它们）
+  pendLoop: number;
   cooldown: number;
   reloading: boolean;
   reloadTotal: number;
@@ -43,6 +48,7 @@ export class Player {
   dashY = 0;
   dashT = 0;
   r = PLAYER.radius;
+  readonly baseR = PLAYER.radius;
   face = Math.PI / 2;
   iframe = 0;
   ffIframe = 0; // 友伤的独立无敌时间（不影响丧尸的伤害判定）
@@ -66,7 +72,9 @@ export class Player {
     const run = this.w.run;
     // 第3次调整：装备中的枪械修饰语（笨重 -15% / 轻盈 +20%）
     const mod = Math.max(0.2, 1 + gunSpeedMod(run.guns[0]) + gunSpeedMod(run.guns[1]));
-    return PLAYER.speed * (1 + run.speedPct / 100) * (run.eelT > 0 ? 2.6 : 1) * mod;
+    // 第4.1次调整：奇物——天生神力 +80%，百折不挠（生命低于一半）+9%
+    const relic = (run.has('might') ? RELIC.mightScale : 1) * (run.has('unyield') && run.lowHp() ? 1 + RELIC.unyieldSpeed : 1);
+    return PLAYER.speed * (1 + run.speedPct / 100) * (run.eelT > 0 ? 2.6 : 1) * mod * relic;
   }
 
   muzzle(hand: number, out: { x: number; y: number }): void {
@@ -111,16 +119,16 @@ export class Player {
       const gun = run.guns[h];
       const hs = this.hands[h];
       hs.firingT += dt;
-      if (!gun) { hs.cursor = 0; hs.cooldown = 0; hs.reloading = false; continue; }
+      if (!gun) { resetCast(hs); hs.cooldown = 0; hs.reloading = false; continue; }
       if (hs.lastGunUid !== gun.uid) {
         hs.lastGunUid = gun.uid;
-        hs.cursor = 0;
+        resetCast(hs);
         hs.cooldown = Math.max(hs.cooldown, 0.25);
         hs.reloading = false;
       }
       const trigger = canFire && (inp.fire[h] || (hs.auto && allowAuto));
       this.updateGun(h, gun, hs, dt, trigger);
-      const st = gunStats(gun);
+      const st = run.handStats(gun, h);
       // 射击中才会产生减速/推力
       if (hs.firingT < st.delay + 0.12) {
         slowMul *= 1 - hs.slow;
@@ -166,49 +174,29 @@ export class Player {
   }
 
   private updateGun(h: number, gun: Gun, hs: HandState, dt: number, trigger: boolean): void {
-    const w = this.w;
-    const run = w.run;
+    const run = this.w.run;
     if (hs.cooldown > 0) hs.cooldown -= dt;
     if (hs.reloading && hs.cooldown <= 0) {
       hs.reloading = false;
-      hs.cursor = 0;
+      resetCast(hs);
     }
-    const tempAtk = run.overheatT > 0 ? 3 : 0;
-    const st = gunStats(gun, tempAtk);
+    const st = run.handStats(gun, h);
     if (st.loaded === 0) return;
     let guard = 0;
     const len = gun.bullets.length;
     while (trigger && hs.cooldown <= 0 && !hs.reloading && guard++ < 8) {
-      // 一次“施放”：逻辑模块会累积到下一发子弹上，多重施放模块让接下来的多发同时射出
-      let toCast = 1;
-      let mods: CastMods = {};
-      let fired = 0;
-      let castGuard = 0;
-      while (toCast > 0 && castGuard++ < 32) {
-        while (hs.cursor < len && !gun.bullets[hs.cursor]) hs.cursor++;
-        if (hs.cursor >= len) break;
-        const b = gun.bullets[hs.cursor++]!;
-        const lg = BULLETS[b.def].logic;
-        if (lg) {
-          if (lg.cast) toCast += lg.cast - 1;
-          if (lg.homing) mods.homing = true;
-          if (lg.pierce) mods.pierce = (mods.pierce ?? 0) + lg.pierce;
-          if (lg.blast) mods.blast = true;
-          if (lg.dmg) mods.dmg = (mods.dmg ?? 1) * lg.dmg;
-          if (lg.speed) mods.speed = (mods.speed ?? 1) * lg.speed;
-          if (lg.focus) mods.focus = (mods.focus ?? 0) + lg.focus;
-          continue;
-        }
-        this.fireOne(h, hs, st, b, mods);
-        mods = {};
-        fired++;
-        toCast--;
+      // 一次“施放”：逻辑模块会累积到下一发子弹上，多重施放模块让接下来的多发同时射出（规则见 castOnce）
+      const shots = castOnce(gun, hs, resolveMystery);
+      for (const s of shots) {
+        this.fireOne(h, hs, st, s.b, s.mods);
+        // 循环模块：之前登记的子弹随这一发一同射出
+        for (const x of s.extra) this.fireOne(h, hs, st, x, {});
       }
       // 下一发
       while (hs.cursor < len && !gun.bullets[hs.cursor]) hs.cursor++;
-      if (hs.cursor >= len) this.startReload(h, hs, st.reload);
+      if (hs.cursor >= len) this.startReload(h, hs, st.reload, st.shorts);
       else hs.cooldown += st.delay;
-      if (fired === 0) break;
+      if (shots.length === 0) break;
     }
     if (hs.cooldown < -0.05) hs.cooldown = 0;
   }
@@ -216,8 +204,6 @@ export class Player {
   private fireOne(h: number, hs: HandState, st: GunStats, b: Bullet, mods: CastMods): void {
     const w = this.w;
     const run = w.run;
-    // 第4次调整：盲盒在发射的瞬间随机变成其他任意子弹（数值也随机浮动）
-    if (BULLETS[b.def].flags?.mystery) b = mysteryBullet(globalRng);
     this.muzzle(h, tmp);
     // 枪口在墙内时从身体中心发射
     let ox = tmp.x, oy = tmp.y;
@@ -232,6 +218,8 @@ export class Player {
     }
     w.projs.fire(st, b, ox, oy, aimAngle, mods);
     w.fx.shoot(ox, oy, aimAngle, BULLETS[b.def], h);
+    // 第4.1次调整：刺客短刀——副手每射出一发子弹
+    if (h === 1) w.relicFx.onOffhandShot();
     run.stats.shotsFired++;
     hs.shots++;
     hs.firingT = 0;
@@ -253,11 +241,19 @@ export class Player {
     }
   }
 
-  startReload(h: number, hs: HandState, reload: number): void {
+  /** shorts：短行程模块的数量（每个各自判定：90% 换弹时间减半，10% 变为 4 倍） */
+  startReload(h: number, hs: HandState, reload: number, shorts = 0): void {
+    const w = this.w;
+    let t = reload;
+    for (let i = 0; i < shorts; i++) t *= globalRng.chance(0.9) ? 0.5 : 4;
+    t = Math.max(GUN_LIMITS.reload, t);
+    if (t > reload + 0.01) w.fx.floatText(this.x, this.y, '换弹卡壳', '#ff7a6a');
     hs.reloading = true;
-    hs.cooldown = reload;
-    hs.reloadTotal = reload;
-    this.w.fx.sound('reload', this.x, this.y, 0.35);
+    hs.cooldown = t;
+    hs.reloadTotal = t;
+    w.fx.sound('reload', this.x, this.y, 0.35);
+    // 第4.1次调整：快速包扎——换弹时回复生命
+    if (w.run.has('bandage')) w.healPlayer(RELIC.bandageHeal, true);
     void h;
   }
 
@@ -268,18 +264,25 @@ export class Player {
       const g = run.guns[h];
       const hs = this.hands[h];
       if (!g || hs.reloading || hs.cursor === 0) continue;
-      const st = gunStats(g);
-      this.startReload(h, hs, st.reload);
+      const st = run.handStats(g, h);
+      this.startReload(h, hs, st.reload, st.shorts);
     }
   }
 
   resetHands(): void {
     for (const hs of this.hands) {
-      hs.cursor = 0; hs.cooldown = 0; hs.reloading = false; hs.slow = 0; hs.pushX = 0; hs.pushY = 0; hs.firingT = 9;
+      resetCast(hs); hs.cooldown = 0; hs.reloading = false; hs.slow = 0; hs.pushX = 0; hs.pushY = 0; hs.firingT = 9;
     }
   }
 }
 
 function makeHand(): HandState {
-  return { cursor: 0, cooldown: 0, reloading: false, reloadTotal: 1, firingT: 9, slow: 0, pushX: 0, pushY: 0, auto: false, lastGunUid: -1, shots: 0 };
+  return { cursor: 0, loops: [], pendLoop: 0, cooldown: 0, reloading: false, reloadTotal: 1, firingT: 9, slow: 0, pushX: 0, pushY: 0, auto: false, lastGunUid: -1, shots: 0 };
+}
+
+/** 新的一轮弹匣：从第一发开始，清空循环模块登记的子弹 */
+function resetCast(hs: HandState): void {
+  hs.cursor = 0;
+  hs.loops.length = 0;
+  hs.pendLoop = 0;
 }

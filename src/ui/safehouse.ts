@@ -1,6 +1,6 @@
 // 安全屋界面：祭坛（属性提升）、商店（枪械/子弹/刷新）、整备（背包 + 出售）。
 
-import { ALTAR, altarCost, RARITY_CSS, RARITY_NAMES, ZONES } from '../config';
+import { ALTAR, altarCost, GLOBAL_ATK_MAX, RARITY_CSS, RARITY_NAMES, ZONES } from '../config';
 import { BULLETS, bulletName, spreadColor } from '../data/bullets';
 import { gunDps } from '../data/guns';
 import { altarBuy, altarValue, buyBullet, buyGun, REFRESH_COST, refreshShop } from '../game/shop';
@@ -45,10 +45,20 @@ export class SafehouseView {
   }
 
   setOpen(v: boolean, tab?: ShTab): void {
+    const was = this.open;
     if (tab) this.tab = tab;
     this.root.classList.toggle('hidden', !v);
     if (v) this.render();
-    else this.tip.hide();
+    else {
+      this.tip.hide();
+      // 第4.1次调整：关闭商店界面时，临时整备区里的物品掉在地上
+      if (was) this.getWorld()?.flushTemp();
+    }
+  }
+
+  /** 买下的东西背包放不下时进了临时整备区 */
+  private tempNote(w: World, item: unknown): void {
+    if (w.run.temp.includes(item as never)) this.cb.toast('背包放不下，已放进临时整备区（在“整备 / 出售”里整理，关闭界面时会掉在地上）', '#ffb03a');
   }
 
   render(): void {
@@ -92,7 +102,7 @@ export class SafehouseView {
       switch (o.id) {
         case 'hp': cur = `当前生命上限 ${Math.round(run.maxHp)}`; break;
         case 'spd': cur = `当前移速加成 +${run.speedPct}%`; break;
-        case 'atk': cur = `作用于当前持有的 ${run.allGuns().length} 把枪`; break;
+        case 'atk': cur = `当前加成 +${run.globalAtk.toFixed(2)}x，最多 +${GLOBAL_ATK_MAX.toFixed(2)}x`; break;
         case 'cap': cur = `作用于当前持有的 ${run.allGuns().length} 把枪`; break;
         case 'recoil': cur = `当前减免 ${Math.round(run.recoilResist * 100)}%`; break;
         case 'purify': cur = `当前辐射 ${run.rad.toFixed(1)}K`; break;
@@ -133,7 +143,7 @@ export class SafehouseView {
       const card = h('div', { class: 'shop-card' + (e.sold ? ' sold' : ''), style: `border-top-color:${RARITY_CSS[g.rarity]}` },
         h('img', { class: 'gi', src: gunIcon(g), draggable: 'false' }),
         h('div', { class: 'nm', style: `color:${RARITY_CSS[g.rarity]}` }, `${g.model} ${g.name}`),
-        h('div', { class: 'st' }, `${RARITY_NAMES[g.rarity]}`, h('br'), `Atk ${g.atk.toFixed(2)}x　延迟 ${g.delay.toFixed(2)}s`, h('br'), `换弹 ${g.reload.toFixed(2)}s　载弹 ${g.cap}　`, h('span', { style: `color:${g.spread > 0 ? '#ff8a6a' : '#6aff8a'}` }, `散射 ${g.spread}°`)),
+        h('div', { class: 'st' }, `${RARITY_NAMES[g.rarity]}`, h('br'), `Atk ${g.atk.toFixed(2)}x`, run.globalAtk > 0 ? h('span', { style: 'color:#ffb03a' }, `+${run.globalAtk.toFixed(2)}`) : '', `　延迟 ${g.delay.toFixed(2)}s`, h('br'), `换弹 ${g.reload.toFixed(2)}s　载弹 ${g.cap}　`, h('span', { style: `color:${g.spread > 0 ? '#ff8a6a' : '#6aff8a'}` }, `散射 ${g.spread}°`)),
         h('div', { class: 'row' }, h('span', { class: 'pr' }, e.sold ? '已售出' : `💰 ${fmtNum(e.price)}`),
           h('button', {
             class: 'btn small', disabled: e.sold || run.bank < e.price,
@@ -142,6 +152,7 @@ export class SafehouseView {
               if (err) { this.cb.sound('denied'); this.cb.toast(err, '#ff5a4a'); return; }
               this.cb.sound('buy');
               this.cb.toast(`购买 ${g.model} ${g.name}`, RARITY_CSS[g.rarity]);
+              this.tempNote(w, g);
               this.render();
             },
           }, '购买')));
@@ -167,7 +178,8 @@ export class SafehouseView {
               const err = buyBullet(run, shop, i);
               if (err) { this.cb.sound('denied'); this.cb.toast(err, '#ff5a4a'); return; }
               this.cb.sound('buy');
-              this.cb.toast(`购买 ${bulletName(b)}（已放入背包）`, col);
+              const inTemp = run.temp.includes(b);
+              this.cb.toast(`购买 ${bulletName(b)}（已放入${inTemp ? '临时整备区' : '背包'}）`, col);
               this.render();
             },
           }, '购买')));
@@ -176,8 +188,10 @@ export class SafehouseView {
     });
     bSec.appendChild(bg);
     // 当前装备速览
+    const bonus = run.atkBonus();
     const eq = h('div', { style: 'font-size:12px;color:#8d939a;margin-top:4px' },
-      `当前装备：主手 ${run.guns[0] ? `${run.guns[0].model}（DPS≈${gunDps(run.guns[0]).toFixed(0)}）` : '空'}　副手 ${run.guns[1] ? `${run.guns[1].model}（DPS≈${gunDps(run.guns[1]).toFixed(0)}）` : '空'}　背包 ${run.bagUsed()}/${run.bagCap}`);
+      `当前装备：主手 ${run.guns[0] ? `${run.guns[0].model}（DPS≈${gunDps(run.guns[0], bonus).toFixed(0)}）` : '空'}　副手 ${run.guns[1] ? `${run.guns[1].model}（DPS≈${gunDps(run.guns[1], bonus).toFixed(0)}）` : '空'}　背包 ${run.bagUsed()}/${run.bagCap}`,
+      run.temp.length ? h('span', { style: 'color:#ffb03a' }, `　临时整备区 ${run.temp.length} 件`) : '');
     this.body.append(gunsSec, bSec, eq);
   }
 }

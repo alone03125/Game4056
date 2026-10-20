@@ -53,12 +53,10 @@ button { font-family: var(--font); }
 .buffs { display: flex; gap: 6px; margin-top: 6px; flex-wrap: wrap; }
 .buff { font-size: 12px; padding: 2px 7px; border: 1px solid currentColor; background: rgba(0,0,0,0.5); }
 
-.hud-tc { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); width: 440px; padding: 8px 14px 10px; text-align: center; }
-.zone-name { font-weight: 900; font-size: 24px; letter-spacing: 2px; }
-.zone-sub { font-size: 12px; color: var(--dim); margin-top: 2px; }
-.rad { margin-top: 7px; }
-.rad-head { display: flex; justify-content: center; font-size: 12px; margin-bottom: 3px; }
-.rad-bar { position: relative; height: 10px; background: rgba(0,0,0,0.6); border: 1px solid var(--line2); margin: 16px 0 16px; }
+/* 第4.1次调整：辐射计量条与生命条放在一起（左上），区域信息与区域任务在右上小地图下方 */
+.rad { margin-top: 6px; }
+.rad-head { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 2px; }
+.rad-bar { position: relative; height: 10px; background: rgba(0,0,0,0.6); border: 1px solid var(--line2); margin: 15px 0 15px; }
 .rad-lbl { position: absolute; font-size: 12px; line-height: 12px; white-space: nowrap; text-shadow: 0 1px 2px #000; }
 .rad-lbl.up { bottom: 14px; }
 .rad-lbl.down { top: 14px; }
@@ -69,10 +67,25 @@ button { font-family: var(--font); }
 .rad.warn3 .rad-head { color: #ff3030; animation: blink .5s infinite; }
 @keyframes blink { 50% { opacity: .45; } }
 
-.hud-tr { position: absolute; right: 16px; top: 14px; padding: 8px; }
+.hud-tr { position: absolute; right: 16px; top: 14px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.tr-panel { padding: 8px; width: 218px; }
 .minimap { display: block; background: #0a0c0e; border: 1px solid var(--line); }
 .tr-stats { display: flex; justify-content: space-between; font-size: 12px; margin-top: 6px; color: var(--dim); gap: 8px; }
 .tr-stats b { color: var(--text); font-family: var(--mono); }
+.zone-box { margin-top: 7px; padding-top: 6px; border-top: 1px solid var(--line); }
+.zone-name { font-weight: 900; font-size: 24px; line-height: 1.15; white-space: nowrap; }
+.zone-sub { font-size: 12px; color: var(--dim); margin-top: 3px; line-height: 1.5; }
+.zone-sub b { color: var(--text); }
+.quest { margin-top: 7px; padding-top: 6px; border-top: 1px solid var(--line); font-size: 12px; line-height: 1.5; }
+.quest .qh { display: flex; justify-content: space-between; font-weight: 800; }
+.quest .qd { color: var(--good); }
+.quest .qt { color: #d0ccc4; }
+.quest .qb { height: 5px; background: rgba(255,255,255,0.1); margin: 3px 0 1px; position: relative; }
+.quest .qb i { position: absolute; left: 0; top: 0; bottom: 0; transition: width .2s; }
+.quest .qw { color: var(--dim); }
+.quest .qc { color: #ffd24a; margin-top: 3px; }
+.relic-row { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
+.relic-row img { width: 24px; height: 24px; pointer-events: auto; image-rendering: pixelated; }
 
 .hud-bl { position: absolute; left: 16px; bottom: 16px; display: flex; gap: 10px; align-items: flex-end; }
 .gun-card { width: 290px; padding: 9px 11px 10px; border-left: 3px solid #888; }
@@ -85,6 +98,7 @@ button { font-family: var(--font); }
 .slot-mini img { width: 22px; height: 22px; image-rendering: auto; }
 .slot-mini.cur { border-color: var(--accent2); box-shadow: 0 0 6px var(--accent2); }
 .slot-mini.spent { opacity: 0.35; }
+.slot-mini.off, .slot.off { opacity: 0.35; background: repeating-linear-gradient(45deg, rgba(255,80,60,0.15) 0 4px, rgba(0,0,0,0.3) 4px 8px); }
 .reload-bar { height: 4px; background: rgba(255,255,255,0.08); margin-top: 7px; position: relative; }
 .reload-fill { position: absolute; left: 0; top: 0; bottom: 0; background: var(--cyan); }
 .recoil-line { font-size: 12px; margin-top: 4px; color: #c8b090; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -105,7 +119,7 @@ button { font-family: var(--font); }
 .bag-ind.flash { animation: bagflash .45s; }
 @keyframes bagflash { 0% { transform: scale(1); box-shadow: 0 0 0 rgba(255,210,74,0); } 30% { transform: scale(1.16); box-shadow: 0 0 22px rgba(255,210,74,.9); } 100% { transform: scale(1); } }
 
-.toasts { position: absolute; right: 16px; top: 330px; width: 340px; display: flex; flex-direction: column; gap: 5px; align-items: flex-end; pointer-events: none; }
+.toasts { width: 340px; display: flex; flex-direction: column; gap: 5px; align-items: flex-end; pointer-events: none; }
 .toast { background: var(--bg); border-right: 3px solid var(--accent); padding: 6px 12px; font-size: 12px; animation: toastIn .25s ease-out; max-width: 340px; }
 .toast.out { animation: toastOut .4s forwards; }
 @keyframes toastIn { from { transform: translateX(30px); opacity: 0; } }
@@ -117,7 +131,7 @@ button { font-family: var(--font); }
 .banner.show { animation: bannerAnim 3.2s forwards; }
 @keyframes bannerAnim { 0% { opacity: 0; transform: scale(1.15); letter-spacing: 20px; } 12% { opacity: 1; transform: scale(1); } 80% { opacity: 1; } 100% { opacity: 0; } }
 
-.boss-bar { position: absolute; left: 50%; top: 166px; transform: translateX(-50%); width: 560px; text-align: center; }
+.boss-bar { position: absolute; left: 50%; bottom: 186px; transform: translateX(-50%); width: 560px; text-align: center; }
 .boss-bar .bn { font-weight: 900; font-size: 12px; letter-spacing: 3px; color: #ff6a5a; text-shadow: 0 2px 6px #000; }
 .boss-bar .bb { height: 14px; margin-top: 4px; background: rgba(0,0,0,0.7); border: 1px solid #ff6a5a; position: relative; }
 .boss-bar .bf { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(180deg, #ff4a3a, #a01a10); transition: width .15s; }
@@ -183,6 +197,23 @@ button { font-family: var(--font); }
 .drop-out-hint { color: #fff; font-family: var(--font); position: fixed; left: 50%; bottom: 30px; transform: translateX(-50%); background: rgba(160,30,20,0.85); padding: 6px 14px; font-size: 12px; z-index: 999; pointer-events: none; }
 .sell-zone { border: 2px dashed rgba(255,210,74,0.5); color: var(--accent2); text-align: center; padding: 10px; margin-top: 8px; font-size: 12px; }
 .sell-zone.drop-ok { background: rgba(255,210,74,0.15); border-color: var(--accent2); }
+/* 第4.1次调整：安全屋里的临时整备区 */
+.temp-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; padding: 8px; min-height: 86px; border: 1px dashed rgba(255,176,58,0.6); background: rgba(255,176,58,0.05); align-content: start; margin-top: 4px; }
+.temp-grid.drop-ok { outline: 2px dashed var(--accent); background: rgba(255,176,58,0.14); }
+.temp-empty { grid-column: span 4; color: #8a7a5a; font-size: 12px; text-align: center; padding: 18px 0; }
+.lock-note { font-size: 12px; color: #ffb03a; margin: -2px 0 6px; }
+/* 第4.1次调整：奇物三选一 */
+.relic-wrap { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; background: rgba(0,0,0,0.55); pointer-events: auto; z-index: 50; }
+.relic-panel { width: min(900px, 94vw); padding: 18px 20px; background: var(--bg2); border: 1px solid #ffd24a; box-shadow: 0 0 40px rgba(255,210,74,0.25); text-align: center; }
+.relic-panel h2 { margin: 0 0 4px; font-size: 24px; letter-spacing: 4px; color: #ffd24a; }
+.relic-panel .sub { font-size: 12px; color: var(--dim); margin-bottom: 14px; }
+.relic-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.relic-card { border: 1px solid var(--line2); background: rgba(255,255,255,0.03); padding: 14px 12px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 8px; transition: transform .1s, border-color .1s, background .1s; }
+.relic-card:hover { transform: translateY(-3px); background: rgba(255,210,74,0.08); }
+.relic-card img { width: 48px; height: 48px; image-rendering: pixelated; }
+.relic-card h4 { margin: 0; font-size: 24px; letter-spacing: 2px; }
+.relic-card p { margin: 0; font-size: 12px; line-height: 1.6; color: #d0ccc4; text-align: left; }
+.relic-card .key { font-size: 12px; color: var(--dim); }
 
 /* —— 提示框 —— */
 .tooltip { position: fixed; z-index: 2000; pointer-events: none; width: 320px; color: var(--text); font-family: var(--font); font-synthesis: none; -webkit-font-smoothing: none; background: rgba(8,10,12,0.96); border: 1px solid var(--line2); padding: 10px 12px; font-size: 12px; line-height: 1.55; box-shadow: 0 10px 30px rgba(0,0,0,0.6); }
@@ -286,7 +317,7 @@ input[type=text] { background: rgba(0,0,0,0.4); border: 1px solid var(--line2); 
 .err { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); max-width: 600px; padding: 20px; }
 
 @media (max-width: 900px) {
-  .hud-tc { width: 300px; }
+  .relic-cards { grid-template-columns: 1fr; }
   .gun-card { width: 230px; }
   .bag-cols { grid-template-columns: 1fr; }
   .shop-grid, .shop-grid.b5 { grid-template-columns: repeat(2, 1fr); }

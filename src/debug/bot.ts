@@ -4,7 +4,7 @@ import type { World } from '../game/world';
 import { NavGrid } from '../world/navgrid';
 import { gunDps, gunStats, Gun } from '../data/guns';
 import { BULLETS } from '../data/bullets';
-import { bulletToSlot, equipFromBag } from '../game/inventory';
+import { bulletToSlot, equipFrom, equipFromBag, Holder } from '../game/inventory';
 import { altarBuy, altarPrice, buyGun, buyBullet } from '../game/shop';
 import type { WorldItem } from '../game/pickups';
 import type { Enemy } from '../game/enemies';
@@ -246,11 +246,15 @@ export class Bot {
       else if (it.id === 'overheat' && (w.phase === 'boss' || threat > 8)) w.useItem(it.uid);
       else if (it.id === 'eel' && threat > 10) w.useItem(it.uid);
     }
+    // 第4.1次调整：奇物三选一——随机选一个
+    if (w.relicFx.offer) w.relicFx.choose(w.relicFx.offer[Math.floor(Math.random() * w.relicFx.offer.length)]);
+    // 第4.1次调整：只能在安全屋里拆装枪械和子弹
+    if (w.phase !== 'safehouse') return;
     for (const b of run.bulletsInBag()) {
       for (const g of run.guns) {
         if (!g) continue;
         const slot = g.bullets.findIndex((x) => !x);
-        if (slot >= 0) { bulletToSlot(run, { from: 'bag', uid: b.uid }, g.uid, slot); break; }
+        if (slot >= 0 && !bulletToSlot(run, { from: 'bag', uid: b.uid }, g.uid, slot)) break;
       }
     }
     for (const it of [...run.bag]) {
@@ -276,8 +280,9 @@ export class Bot {
     const worstG = run.guns[worstHand];
     if (bestI >= 0 && (!worstG || best > gunPotential(worstG) * 1.25) && run.bank - shop.guns[bestI].price > 1500) {
       const g = shop.guns[bestI].item;
-      if (!buyGun(run, shop, bestI) && worstG && run.bag.includes(g)) {
-        equipFromBag(run, g.uid, worstHand);
+      if (!buyGun(run, shop, bestI) && worstG && (run.bag.includes(g) || run.temp.includes(g))) {
+        const from: Holder = run.bag.includes(g) ? 'bag' : 'temp';
+        equipFrom(run, from, g.uid, worstHand);
         worstG.bullets.forEach((b, i) => { if (b && i < g.cap) bulletToSlot(run, { from: 'slot', gunUid: worstG.uid, slot: i }, g.uid, i); });
       }
     }
@@ -286,7 +291,8 @@ export class Bot {
       if (free && shop.bullets[i].price < run.bank * 0.5) {
         if (!buyBullet(run, shop, i)) {
           const b = shop.bullets[i].item;
-          for (const g of run.guns) { if (!g) continue; const s = g.bullets.findIndex((x) => !x); if (s >= 0) { bulletToSlot(run, { from: 'bag', uid: b.uid }, g.uid, s); break; } }
+          const from: Holder = run.bag.includes(b) ? 'bag' : 'temp';
+          for (const g of run.guns) { if (!g) continue; const s = g.bullets.findIndex((x) => !x); if (s >= 0 && !bulletToSlot(run, { from, uid: b.uid }, g.uid, s)) break; }
         }
       }
     }

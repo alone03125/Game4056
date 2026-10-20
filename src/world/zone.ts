@@ -8,7 +8,8 @@ import { ZoneCfg, ZONES, ZONE_W, ZONE_H, BOSS_W, BOSS_H, SAFEHOUSE } from '../co
 
 export type ObKind =
   | 'wall' | 'tower' | 'car' | 'barrier' | 'rubble' | 'crate' | 'barrel' | 'tree' | 'container'
-  | 'pillar' | 'border' | 'roomwall' | 'door' | 'station' | 'sandbag' | 'lamp' | 'fountain' | 'bleacher';
+  | 'pillar' | 'border' | 'roomwall' | 'door' | 'station' | 'sandbag' | 'lamp' | 'fountain' | 'bleacher'
+  | 'pyre'; // 第4.1次调整：区域任务“点燃火堆”的可燃物堆（由 quest.ts 放置，单独渲染）
 
 export interface Obstacle extends AABB {
   id: number;

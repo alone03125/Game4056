@@ -10,6 +10,8 @@ import type { World } from '../game/world';
 import { ZoneLayout } from '../world/zone';
 import { EntityView } from './entities';
 import { Particles } from './particles';
+import { QuestView } from './questView';
+import { RELIC } from '../data/relics';
 import { ZoneView } from './zoneView';
 import { ScreenPt } from './overlay';
 import { damp } from '../util/math';
@@ -33,8 +35,11 @@ export class Renderer {
   zone: ZoneView | null = null;
   entities: EntityView;
   particles: Particles;
+  quests: QuestView;
   quality: Quality;
   zoom = 1;
+  /** 第4.1次调整：天生神力——视野 +80%（平滑过渡） */
+  viewMul = 1;
   shakeAmt = 0;
   shakeEnabled = true;
   camX = 0;
@@ -92,6 +97,7 @@ export class Renderer {
     this.entities = new EntityView(this.scene, quality >= 1);
     this.particles = new Particles(this.scene, quality >= 2 ? 6000 : quality === 1 ? 4000 : 2000);
     this.particles.density = quality >= 2 ? 1 : quality === 1 ? 0.8 : 0.5;
+    this.quests = new QuestView(this.scene, this.particles);
     if (quality >= 2) this.setupComposer();
   }
 
@@ -191,7 +197,12 @@ export class Renderer {
     this.shakeAmt = Math.max(0, this.shakeAmt - dt * 2.4);
     const sh = this.shakeAmt * this.shakeAmt * 0.9;
     const sx = (Math.random() - 0.5) * sh, sy = (Math.random() - 0.5) * sh;
-    const H = 23 * this.zoom, D = 12.5 * this.zoom;
+    const vm = w.run.has('might') && !w.showcase ? RELIC.mightScale : 1;
+    this.viewMul += (vm - this.viewMul) * Math.min(1, dt * 2);
+    const H = 23 * this.zoom * this.viewMul, D = 12.5 * this.zoom * this.viewMul;
+    if (this.scene.fog instanceof THREE.Fog) { this.scene.fog.near = 34 * this.viewMul; this.scene.fog.far = 82 * this.viewMul; }
+    const far = 220 * Math.max(1, this.viewMul);
+    if (Math.abs(this.camera.far - far) > 1) { this.camera.far = far; this.camera.updateProjectionMatrix(); }
     this.camera.position.set(this.camX + sx, H, -this.camY + D + sy);
     this.camera.lookAt(this.camX + sx * 0.5, 0, -this.camY + sy * 0.5);
     // —— 灯光 ——
@@ -238,6 +249,7 @@ export class Renderer {
       this.zone.updateSuit(w.layout.prevRoom, w.suitOffer(), w.layout.safeRoom, Math.min(SUIT_MAX, w.run.suit + 1), time);
     }
     this.entities.update(w, dt, time, this.camera);
+    this.quests.update(w, dt, time, this.camera, this.zone);
     this.particles.update(dt);
     if (this.composer) this.composer.render(dt);
     else this.renderer.render(this.scene, this.camera);

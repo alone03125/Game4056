@@ -4,6 +4,7 @@
 // - 金币：单人模式下从全图吸取；联机时有一定的吸取范围。金币在每个玩家本地各自生成
 //   （击杀者 100%，其他玩家 25%），因此不会出现重复吸取同一枚金币的问题。
 // - 联机时地面物品由房主裁决归属：非房主拾取前需要先向房主申请。
+// 第4.1次调整：奇物——任意玩家捡起后，所有玩家各自从三个增益中选择一个；1 秒内拾取的金币合并成一个跳字。
 
 import { PLAYER } from '../config';
 import { randomBullet } from '../data/bullets';
@@ -135,7 +136,7 @@ export class Pickups {
             run.stats.goldEarned += take;
             c.amount -= take;
             w.fx.sound('coin', c.x, c.y, 0.4);
-            w.fx.floatText(p.x, p.y, `+${take}`, '#ffd24a');
+            w.fx.goldText(p.x, p.y, take);
             if (c.amount <= 0) c.dead = true;
             else c.blockT = 1;
           }
@@ -184,6 +185,7 @@ export class Pickups {
   private fitError(th: WorldThing): string | null {
     const run = this.w.run;
     if (th.kind === 'gold') return run.goldRoom() > 0 ? null : '背包已满，无法拾取金币';
+    if (th.kind === 'relic') return null;
     if (th.kind === 'item' && !ITEMS[th.id].keep) return null;
     if (th.kind === 'gun' && (!run.guns[0] || !run.guns[1])) return null;
     const size = itemSize(th);
@@ -226,6 +228,11 @@ export class Pickups {
     if (!it) return;
     const was = !it.dead;
     it.dead = true;
+    // 奇物：不管是谁捡起的，每个人都可以选择一个增益
+    if (it.thing.kind === 'relic') {
+      if (was || it.pending > 0) this.relicTaken(by === w.myId);
+      return;
+    }
     if (by === w.myId && (was || it.pending > 0)) {
       // 申请通过；若期间背包被占满，就重新丢回地上
       if (this.fitError(it.thing)) { this.dropThing(it.thing, w.player.x, w.player.y, false); w.fx.toast('背包空间不足，物品掉在了脚下', '#ff5a4a'); return; }
@@ -238,7 +245,16 @@ export class Pickups {
     const it = this.find(uid);
     if (!it) return false;
     it.dead = true;
+    if (it.thing.kind === 'relic') this.relicTaken(false);
     return true;
+  }
+
+  /** 奇物被捡起：打开三选一 */
+  private relicTaken(mine: boolean): void {
+    const w = this.w;
+    w.fx.toast(mine ? '你捡起了奇物：选择一个增益' : '队友捡起了奇物：选择一个增益', '#ffd24a');
+    w.fx.sound('pickupBig');
+    w.relicFx.grant();
   }
 
   onDenied(uid: number): void {
@@ -251,11 +267,12 @@ export class Pickups {
     const w = this.w;
     const run = w.run;
     const p = w.player;
+    if (th.kind === 'relic') { this.relicTaken(true); return; }
     if (th.kind === 'gold') {
       const take = Math.min(run.goldRoom(), th.amount);
       run.gold += take;
       w.fx.sound('coin', p.x, p.y, 0.6);
-      w.fx.floatText(p.x, p.y, `+${take}`, '#ffd24a');
+      w.fx.goldText(p.x, p.y, take);
       if (take < th.amount) this.dropThing({ uid: 0, kind: 'gold', amount: th.amount - take }, p.x, p.y, false);
       return;
     }

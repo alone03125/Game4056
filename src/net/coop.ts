@@ -2,8 +2,10 @@
 //
 // 发送频率：玩家状态 20 次/秒；房主的丧尸快照（二进制）20 次/秒；流程信息与 Boss 状态 10 次/秒；
 // 其余事件（射击、伤害、击杀、拾取……）在每帧末尾合并成一条消息发送。
+// 第4.1次调整：碰撞伤害由被打的玩家本地判定，受伤后通知房主（hu），房主再同步给所有人（hf）；
+// 区域任务的进度随流程信息（ws）同步。
 
-import { BULLETS, BULLET_IDS } from '../data/bullets';
+import { PROJ_IDS, projDef } from '../data/bullets';
 import { GunLook } from '../data/guns';
 import { WorldThing } from '../data/items';
 import { nextUid } from '../data/bullets';
@@ -11,6 +13,7 @@ import { Enemy, EnemyShot, TYPE_CODE } from '../game/enemies';
 import { NetHooks, RemotePlayer, RemoteProfile } from '../game/net';
 import { QUICK_ORDER } from '../data/items';
 import type { Gun } from '../data/guns';
+import type { RelicId } from '../data/relics';
 import { WorldItem } from '../game/pickups';
 import { Proj, Projectiles } from '../game/projectiles';
 import type { PhaseMsg, World } from '../game/world';
@@ -87,8 +90,22 @@ export class Coop implements NetHooks {
     return [...this.rem.values()];
   }
 
-  hitRemote(id: number, dmg: number, sx: number, sy: number, kx: number, ky: number): void {
-    this.to(id, { k: 'hit', d: r1(dmg), sx: r2(sx), sy: r2(sy), kx: r2(kx), ky: r2(ky) });
+  hurt(src: number, dmg: number): void {
+    // 房主：直接告诉其他人自己受伤了；其他玩家：告诉房主（房主让那只丧尸进入出手冷却，再转告其他人）
+    if (this.isHost) { if (dmg > 0) this.qAll.push({ k: 'hf', id: this.myId, d: r1(dmg) }); }
+    else this.qHost.push({ k: 'hu', e: src, d: r1(dmg) });
+  }
+
+  questIgnite(i: number): void {
+    this.qHost.push({ k: 'qi', i });
+  }
+
+  questKick(i: number, x: number, y: number, vx: number, vy: number): void {
+    this.qHost.push({ k: 'qk', i, x: r2(x), y: r2(y), vx: r2(vx), vy: r2(vy) });
+  }
+
+  radAvg(v: number): void {
+    this.qAll.push({ k: 'ra', v });
   }
 
   enemyKilled(e: Enemy, gold: number, by: number): void {
@@ -199,7 +216,7 @@ export class Coop implements NetHooks {
       }
     }
     if (this.isHost) {
-      if (w.worldStateDue(dt)) this.qAll.push({ k: 'ws', cd: r2(w.countdown), ct: r2(w.closeT), info: w.waitInfo, zt: r1(w.zoneTime) });
+      if (w.worldStateDue(dt)) this.qAll.push({ k: 'ws', cd: r2(w.countdown), ct: r2(w.closeT), info: w.waitInfo, zt: r1(w.zoneTime), q: w.quests.netState() });
       this.bsT -= dt;
       if (this.bsT <= 0 && w.boss && !w.boss.mirror) {
         this.bsT = 0.1;
@@ -235,13 +252,14 @@ export class Coop implements NetHooks {
   private profileSig(): string {
     const run = this.w.run;
     const g = run.guns.map((x) => (x ? `${x.uid}:${x.bullets.map((b) => b?.uid ?? 0).join('.')}:${x.atk}:${x.reload}:${x.cap}` : '-')).join('|');
-    return `${g}#${QUICK_ORDER.map((id) => run.countItem(id)).join(',')}#${run.recoilResist}#${run.gold}#${run.bank}#${run.bagUsed()}#${run.bagCap}`;
+    return `${g}#${QUICK_ORDER.map((id) => run.countItem(id)).join(',')}#${run.recoilResist}#${run.gold}#${run.bank}#${run.bagUsed()}#${run.bagCap}#${run.relics.join(',')}`;
   }
 
   private myProfile(): any {
     const run = this.w.run;
     return {
       k: 'pf', g: run.guns, q: QUICK_ORDER.map((id) => run.countItem(id)), rr: run.recoilResist, gd: run.gold, bk: run.bank, bu: run.bagUsed(), bc: run.bagCap,
+      rl: run.relics,
     };
   }
 
@@ -294,7 +312,8 @@ export class Coop implements NetHooks {
       if (e.dead) continue;
       v.setUint32(o, e.id, true);
       v.setUint8(o + 4, TYPE_CODE.indexOf(e.type));
-      v.setUint8(o + 5, (e.elite & 3) | (e.burnT > 0 ? 4 : 0) | (e.slowT > 0 ? 8 : 0) | (e.fuse >= 0 ? 16 : 0) | (e.stunT > 0 ? 32 : 0));
+      v.setUint8(o + 5, (e.elite & 3) | (e.burnT > 0 ? 4 : 0) | (e.slowT > 0 ? 8 : 0) | (e.fuse >= 0 ? 16 : 0) | (e.stunT > 0 ? 32 : 0)
+        | (e.mutant ? 64 : 0) | (e.corrodeT > 0 ? 128 : 0));
       v.setFloat32(o + 6, e.x, true);
       v.setFloat32(o + 10, e.y, true);
       v.setInt16(o + 14, Math.max(-32000, Math.min(32000, Math.round(e.vx * 100))), true);
@@ -356,6 +375,7 @@ export class Coop implements NetHooks {
           const prof: RemoteProfile = {
             guns: [(ev.g?.[0] ?? null) as Gun | null, (ev.g?.[1] ?? null) as Gun | null], counts: ev.q ?? [], recoilResist: ev.rr ?? 0,
             gold: ev.gd ?? 0, bank: ev.bk ?? 0, bagUsed: ev.bu ?? 0, bagCap: ev.bc ?? 16,
+            relics: Array.isArray(ev.rl) ? (ev.rl as RelicId[]) : [],
           };
           r.prof = prof;
         }
@@ -368,7 +388,7 @@ export class Coop implements NetHooks {
           w.projs.spawnGhost(a, from);
           if (!fxDone) {
             fxDone = true;
-            const def = BULLETS[BULLET_IDS[a[0]]];
+            const def = projDef(PROJ_IDS[a[0]]);
             if (def) w.fx.remoteShot(a[1], a[2], Math.atan2(a[4], a[3]), def);
             if (r) r.firingT[0] = 0;
           }
@@ -379,9 +399,20 @@ export class Coop implements NetHooks {
       case 'kb': if (this.isHost) for (const a of ev.a as number[][]) w.enemies.applyRemoteKnock(a[0], a[1], a[2]); break;
       case 'stn': if (this.isHost) for (const a of ev.a as number[][]) w.enemies.applyRemoteStun(a[0], a[1]); break;
       case 'vx': if (this.isHost) w.projs.addPullVortex(ev.x, ev.y, ev.r, ev.dur); break;
-      case 'hit':
-        if (w.damagePlayer(ev.d, ev.sx, ev.sy)) { w.player.kx += ev.kx; w.player.ky += ev.ky; }
+      case 'hu':
+        // 房主：其他玩家本地判定受到了伤害
+        if (!this.isHost) break;
+        if (typeof ev.e === 'number' && ev.e >= 0) w.enemies.onRemoteHurt(ev.e);
+        if (ev.d > 0) { this.hurtFx(from); this.qAll.push({ k: 'hf', id: from, d: ev.d }); }
         break;
+      case 'hf': {
+        const id = typeof ev.id === 'number' ? ev.id : from;
+        if (id !== this.myId) this.hurtFx(id);
+        break;
+      }
+      case 'qi': if (this.isHost) w.quests.ignite(ev.i, false); break;
+      case 'qk': if (this.isHost) w.quests.onKick(ev.i, ev.x, ev.y, ev.vx, ev.vy); break;
+      case 'ra': if (from === this.hostId) w.applyRadAvg(Number(ev.v) || 0); break;
       case 'kill':
         if (this.isHost) break;
         for (const a of ev.a as number[][]) {
@@ -396,7 +427,11 @@ export class Coop implements NetHooks {
         break;
       }
       case 'ph': if (from === this.hostId) w.onPhaseMsg(ev.p as PhaseMsg); break;
-      case 'ws': if (from === this.hostId) w.applyWorldState(ev.cd, ev.ct, String(ev.info ?? ''), ev.zt); break;
+      case 'ws':
+        if (from !== this.hostId) break;
+        w.applyWorldState(ev.cd, ev.ct, String(ev.info ?? ''), ev.zt);
+        if (Array.isArray(ev.q)) w.quests.applyNet(ev.q);
+        break;
       case 'bs': if (from === this.hostId && w.boss?.mirror) w.boss.applyState(ev.s, ev.an, !!ev.en, ev.tp, ev.tl); break;
       case 'fx': if (from === this.hostId) w.applyFx(ev.n, ev.a); break;
       case 'claim':
@@ -438,6 +473,15 @@ export class Coop implements NetHooks {
       if (wasDown && !r.downed && !r.dead) w.fx.toast(`${r.name} 被拉了起来`, '#6aff8a');
       if (!wasDead && r.dead) w.fx.toast(`${r.name} 在本局中阵亡了`, '#ff3030');
     }
+  }
+
+  /** 队友受伤的表现（血花 + 头像闪红） */
+  private hurtFx(id: number): void {
+    const r = this.rem.get(id);
+    if (!r || r.dead) return;
+    r.hurtT = 0.25;
+    this.w.fx.blood(r.x, r.y, 0xaa1010, 5);
+    this.w.fx.sound('hit', r.x, r.y, 0.3);
   }
 
   private onLeft(id: number, name: string): void {

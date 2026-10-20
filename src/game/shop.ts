@@ -1,6 +1,6 @@
 // 安全屋：商店（4 把枪 + 5 枚子弹，可刷新）与祭坛（属性提升），以及出售（自定）。
 
-import { ALTAR, AltarId, altarCost, ZONES } from '../config';
+import { ALTAR, AltarId, altarCost, GLOBAL_ATK_MAX, ZONES } from '../config';
 import { Bullet, randomBullet } from '../data/bullets';
 import { Gun, makeGun, rollRarity } from '../data/guns';
 import { BagItem, ITEMS, JAR_VALUE } from '../data/items';
@@ -61,13 +61,13 @@ export function buyGun(run: RunState, s: ShopState, i: number): string | null {
   const e = s.guns[i];
   if (!e || e.sold) return '已售出';
   if (run.bank < e.price) return '金币不足';
-  // 空手时直接装备
+  // 空手时直接装备；背包放不下时放进临时整备区（第4.1次调整）
   const slot: number = run.guns[0] ? (run.guns[1] ? -1 : 1) : 0;
-  if (slot < 0 && !run.canFit(4)) return '背包空间不足（需要 4 单位）';
   run.bank -= e.price;
   e.sold = true;
   if (slot >= 0) run.guns[slot as 0 | 1] = e.item;
-  else run.bag.push(e.item);
+  else if (run.canFit(4)) run.bag.push(e.item);
+  else run.temp.push(e.item);
   return null;
 }
 
@@ -75,10 +75,10 @@ export function buyBullet(run: RunState, s: ShopState, i: number): string | null
   const e = s.bullets[i];
   if (!e || e.sold) return '已售出';
   if (run.bank < e.price) return '金币不足';
-  if (!run.canFit(1)) return '背包空间不足';
   run.bank -= e.price;
   e.sold = true;
-  run.bag.push(e.item);
+  if (run.canFit(1)) run.bag.push(e.item);
+  else run.temp.push(e.item);
   return null;
 }
 
@@ -96,11 +96,12 @@ export function altarBuy(run: RunState, id: AltarId, zone: number): string | nul
   const cost = free ? 0 : altarCost(run.altarCount);
   if (!free && run.bank < cost) return '金币不足';
   if (id === 'recoil' && run.recoilResist >= 0.8) return '后坐力减免已达上限';
+  if (id === 'atk' && run.globalAtk >= GLOBAL_ATK_MAX - 1e-9) return `全局攻击倍率加成已达上限（+${GLOBAL_ATK_MAX.toFixed(2)}x）`;
   const v = altarValue(id, zone);
   switch (id) {
     case 'hp': run.maxHp += v; run.hp += v; break;
     case 'spd': run.speedPct += v; break;
-    case 'atk': run.addAtkAll(v); break;
+    case 'atk': run.globalAtk = Math.min(GLOBAL_ATK_MAX, Math.round((run.globalAtk + v) * 1000) / 1000); break;
     case 'cap': run.addCapAll(v); break;
     case 'recoil': run.recoilResist = Math.min(0.8, run.recoilResist + v / 100); break;
     case 'purify': run.rad = Math.max(0, run.rad - v); break;
@@ -125,9 +126,10 @@ export function sellPrice(it: BagItem): number {
 }
 
 export function sellItem(run: RunState, uid: number): string | null {
-  const it = run.bag.find((b) => b.uid === uid);
-  if (!it) return '无效的操作';
-  run.removeFromBag(uid);
+  const list = run.bag.some((b) => b.uid === uid) ? run.bag : run.temp;
+  const i = list.findIndex((b) => b.uid === uid);
+  if (i < 0) return '无效的操作';
+  const it = list.splice(i, 1)[0];
   run.bank += sellPrice(it);
   return null;
 }

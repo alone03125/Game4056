@@ -1,19 +1,21 @@
 // 菜单：主菜单、新游戏（难度/种子）、联机（创建/加入房间、房间大厅）、暂停、设置（含亮度与键位）、
 // 操作说明、图鉴、结算（死亡/胜利）。
 
-import { COOP, DIFFICULTY, Difficulty, GUN_LIMITS, RARITY_CSS, RARITY_NAMES, ZONES } from '../config';
+import { BOSS, CHEST_HP, COOP, CREEPER, DIFFICULTY, Difficulty, ELITE_CSS, ELITE_MUL, ENEMIES, GUN_LIMITS, MAMBA, MUTANT, RARITY_CSS, RARITY_NAMES, ZONES } from '../config';
 import { BULLETS, BULLET_IDS, BUTTER } from '../data/bullets';
 import { GUN_BUDGET_K, GUN_MOD_IDS, GUN_MODS, makeFixedGun, MOD_TONE_CSS } from '../data/guns';
 import { ItemId, ITEMS, ITEM_IDS, ITEM_VALUES, itemSize, JAR_VALUE, QUICK_ORDER } from '../data/items';
 import { STARTER_GUNS } from '../game/state';
 import { CORE_PURIFY } from '../game/world';
+import { QUEST, QUEST_IDS, QUEST_INFO } from '../game/quest';
+import { RELIC_IDS, RELICS } from '../data/relics';
 import { Rng } from '../util/rng';
 import { KEY_ACTIONS, KeyAction, keyLabel, Records, Settings, DEFAULT_KEYS } from '../core/settings';
 import type { LobbyState } from '../net/transport';
 import type { RunState } from '../game/state';
 import { fmtNum, fmtTime } from '../util/math';
 import { clear, h } from './dom';
-import { bulletIcon, gunIcon, itemIcon } from './icons';
+import { bulletIcon, glyphIcon, gunIcon, itemIcon, relicIcon } from './icons';
 
 export interface MenuActions {
   start(diff: Difficulty, seed: number | null): void;
@@ -325,7 +327,7 @@ export class Menus {
         k('W A S D', '移动（方向键亦可）'), k('鼠标', '瞄准'), k('左键', '主手枪械射击'), k('右键', '副手枪械射击（两把枪可同时使用）'),
         k(`${keyLabel(K.autoL)} / ${keyLabel(K.autoR)}`, '主手 / 副手 自动射击开关'), k(keyLabel(K.reload), '提前换弹'),
         k(keyLabel(K.interact), '拉起倒地的队友、拾取地上的物品、使用安全屋里的设施'),
-        k(keyLabel(K.bag), '打开背包（同时暂停游戏）'), k(items, '使用快捷栏道具：止痛药、奶白金、过热模块、鳗、净化血清、零件1型、零件2型'),
+        k(keyLabel(K.bag), '打开背包（同时暂停游戏）'), k(items, '使用快捷栏道具：止痛药、奶白金、过热模块、鳗、净化血清、零件1型、零件2型；选择奇物时按 1 ~ 3 选择'),
         k('ESC', '暂停与菜单'), k('空格', '观战时切换队友')),
       h('h3', null, '基本循环'),
       h('p', null, '持枪杀敌开路并获取金币，在区域中寻找枪械、子弹与道具，抵达区域对角的安全屋休整、改装枪械并升级自身。共 4 个区域，之后是尸王“牢大丧尸”。据说在辐射进入橙色之前击败尸王，就能找到通往隐秘核心的路……'),
@@ -346,7 +348,15 @@ export class Menus {
         h('li', null, '携带的金币以金币堆的形式放在背包格子里，每堆占 1 格；背包挤满时可以把金币堆丢在地上腾出空间。'),
         h('li', null, '地图里的部分强化道具带有【高级】或【顶级】前缀，效果更强。'),
         h('li', null, `经过地上的道具就能自动拾取，自己丢下的物品需要按 ${keyLabel(K.interact)} 捡回来。金币会自动飞向你。`),
-        h('li', null, '背包图标变橙表示快满了，变红表示满了，满了就捡不了金币。把物品拖出背包面板即可丢在地上。')),
+        h('li', null, '背包图标变橙表示快满了，变红表示满了，满了就捡不了金币。把物品拖出背包面板即可丢在地上。'),
+        h('li', null, '只有在安全屋里才能拆装枪械和子弹；在区域中打开背包只能丢弃背包里的物品和金币、使用道具。'),
+        h('li', null, '获取金币时，1 秒内捡到的金币会合并成一个数字显示。')),
+      h('h3', null, '区域任务与奇物'),
+      h('ul', null,
+        h('li', null, '第一 ~ 第四区各有一项区域任务（发送信号、点燃火堆、击杀异变体、运送物资、清除瘴气中的 4 种，不会重复），离开安全屋时发布，任务进度显示在小地图下方。'),
+        h('li', null, '离开安全屋一段时间后，或者找到过目标之后，屏幕边缘会出现目标的方向箭头。'),
+        h('li', null, '完成任务后，下一个区域会出现奇物宝箱（第四区的任务对应尸王广场）。打破宝箱会掉落奇物，任何人捡起后，每个人都能从三个增益中选择一个。'),
+        h('li', null, '奇物增益是全局的，不管拿着什么枪都会生效，以小图标显示在生命条下方，详见图鉴。')),
       h('h3', null, '辐射'),
       h('ul', null,
         h('li', null, '辐射随时间不断上升，不会自然下降。越过橙色、红色阈值后会持续掉血。'),
@@ -356,13 +366,14 @@ export class Menus {
       h('h3', null, '丧尸'),
       h('ul', null,
         h('li', null, '社畜丧尸、头铁丧尸（皮糙肉厚）、跑得快丧尸、吐口水丧尸（会保持距离远程吐口水）。'),
-        h('li', null, '苦力怕：靠近你或者被打死后会嘶嘶作响、一边闪白一边膨胀，2 秒后爆炸，连周围的丧尸也一起炸（对丧尸伤害更高）。远远打死它能拿到更多金币。'),
+        h('li', null, '苦力怕：靠近你或者被打死后会嘶嘶作响、一边闪白一边膨胀，地面会出现红色的爆炸范围，2 秒后爆炸，连周围的丧尸也一起炸（对丧尸伤害更高）。远远打死它能拿到更多金币。'),
         h('li', null, '带黄、橙、红光环的是变异精英：更强，掉落更多金币，偶尔还会掉落子弹。')),
       h('h3', null, '安全屋'),
       h('ul', null,
         h('li', null, '进入即关门：身上的金币和金币罐都会存起来，贵重品可以换一次免费的祭坛加点。走到医疗箱旁按交互键回满生命。'),
         h('li', null, '祭坛：花金币提升属性。商店：购买枪械和子弹，也可以刷新货架、出售用不上的物品。'),
         h('li', null, '安全屋里可以开枪试试手感，子弹不会伤到自己和队友。'),
+        h('li', null, '安全屋的背包和商店里有一个不限格数的临时整备区，方便拆下枪里的子弹、存放背包放不下的东西；关闭背包或商店界面时，里面的物品会全部掉在地上。'),
         h('li', null, '准备好后走到出口前的黄色区域，倒计时结束后开门进入下一区。')),
       h('h3', null, '联机'),
       h('ul', null,
@@ -373,7 +384,7 @@ export class Menus {
       h('div', { class: 'actions' }, this.btn('返回', () => this.back(), true))));
   }
 
-  codex(tab: 'bullet' | 'module' | 'gun' | 'item' = 'bullet'): void {
+  codex(tab: 'bullet' | 'module' | 'gun' | 'item' | 'enemy' | 'quest' | 'relic' = 'bullet'): void {
     // 第3次调整：图鉴显示道具 / 枪械 / 子弹 / 模块的标准数值与变动（不含随机浮动和前缀）
     const sgn = (v: number, d = 2) => `${v > 0 ? '+' : ''}${v.toFixed(d)}`;
     const hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
@@ -389,7 +400,7 @@ export class Menus {
       return out.length ? h('div', { class: 'cx-row cx-mods' }, h('em', null, '装填后'), ...out) : null;
     };
     const tabs = h('div', { class: 'tabs', style: 'margin-bottom:10px' });
-    const names: [typeof tab, string][] = [['bullet', '子弹'], ['module', '逻辑模块'], ['gun', '枪械'], ['item', '道具']];
+    const names: [typeof tab, string][] = [['bullet', '子弹'], ['module', '逻辑模块'], ['gun', '枪械'], ['item', '道具'], ['enemy', '敌人'], ['quest', '区域任务'], ['relic', '奇物']];
     for (const [id, nm] of names) tabs.appendChild(h('div', { class: 'tab' + (tab === id ? ' on' : ''), onclick: () => { this.act.sound('click'); this.codex(id); } }, nm));
     const body = h('div', null);
     if (tab === 'bullet') {
@@ -437,6 +448,14 @@ export class Menus {
         if (L.dmg) fx.push(stat('伤害', `×${L.dmg}`, 'good'));
         if (L.speed) fx.push(stat('弹速', `×${L.speed}`, 'good'));
         if (L.focus) fx.push(stat('散射', `-${L.focus}°`, 'good'));
+        if (L.shine) fx.push(stat('闪耀虹彩', '下一发', 'good'));
+        if (L.loop) fx.push(stat('循环', '下一发', 'good'));
+        if (L.short) fx.push(stat('换弹时间', '90% 减半 / 10% ×4'));
+        if (L.smelt) fx.push(stat('熔炼', '后两发合一', 'good'));
+        if (L.multi) fx.push(stat('分裂', `×${L.multi}`, 'good'));
+        if (L.copy) fx.push(stat('复制', '前一发子弹', 'good'));
+        if (d.mods.reloadMul) fx.push(stat('换弹时间', `-${Math.round((1 - d.mods.reloadMul) * 100)}%`, 'good'));
+        if (d.mods.half) fx.push(stat('载弹量', '减半', 'bad'));
         grid.appendChild(card(bulletIcon(id), h('b', { class: 'cx-t', style: `color:${hex(d.color)}` }, d.name),
           h('div', { class: 'cx-row' }, h('em', null, '效果'), ...fx),
           modLine(d.mods) ?? h('div', { class: 'cx-row cx-mods' }, h('em', null, '装填后'), h('span', { class: 'cx-s' }, h('b', null, '不改变枪械数值'))),
@@ -489,6 +508,51 @@ export class Menus {
             stat('载弹量', String(g.cap)), stat('散射', `${g.spread}°`, g.spread > 0 ? 'bad' : 'good'))));
       }
       body.appendChild(sg);
+    } else if (tab === 'enemy') {
+      body.appendChild(h('p', { style: 'color:#8d939a;margin:0 0 8px' }, '以下为第一区、普通难度下的基础数值。越往后的区域、辐射越高，丧尸越强。'));
+      const grid = h('div', { class: 'cx-grid' });
+      const spd = (v: number) => (v >= 4.8 ? '快' : v >= 4.2 ? '中等' : '慢');
+      const zombie = (glyph: string, color: string, name: string, s: [string, string][], desc: string) =>
+        grid.appendChild(card(glyphIcon(glyph, color), h('b', { class: 'cx-t', style: `color:${color}` }, name),
+          h('div', { class: 'cx-row' }, ...s.map(([k, v]) => stat(k, v))), h('div', { class: 'cx-eff' }, desc)));
+      const base = (t: keyof typeof ENEMIES): [string, string][] => [['生命', String(ENEMIES[t].hp)], ['攻击', String(ENEMIES[t].atk)], ['速度', spd(ENEMIES[t].speed)], ['金币', String(ENEMIES[t].gold)]];
+      zombie('社', '#c8b8a0', ENEMIES.office.name, base('office'), '最常见的丧尸，数量众多。');
+      zombie('铁', '#9aa4b0', ENEMIES.iron.name, base('iron'), '皮糙肉厚、体型高大，不容易被击退，受伤后头顶会显示血条。');
+      zombie('跑', '#ff9a6a', ENEMIES.runner.name, base('runner'), '跑得飞快，从第二区开始出现。');
+      zombie('吐', '#9aff4a', ENEMIES.spitter.name, base('spitter'), '会和你保持距离，远远地吐出口水；从第三区开始出现。');
+      zombie('爆', '#6aff6a', ENEMIES.creeper.name, [['生命', String(ENEMIES.creeper.hp)], ['爆炸伤害', String(CREEPER.boom)], ['金币', `${ENEMIES.creeper.gold}（被打死）/ ${CREEPER.nearGold}`]],
+        '靠近你或者被打死后会嘶嘶作响，地面出现红色的爆炸范围，2 秒后爆炸；爆炸也会波及周围的丧尸，对丧尸的伤害更高。');
+      zombie('异', '#ff7aff', '异变体', [['生命', `同类的 ${MUTANT.hp} 倍`], ['攻击', `同类的 ${MUTANT.atk} 倍`], ['速度', `同类的 ${MUTANT.speed} 倍`]],
+        '区域任务“击杀异变体”中出现的特殊丧尸，全身散发虹彩光芒，不会消失。可能是除苦力怕以外的任何一种丧尸。');
+      zombie('变', ELITE_CSS[2], '变异精英', ELITE_MUL.slice(1).map((v, i) => [['黄色', '橙色', '红色'][i], `生命、攻击 ×${v}`] as [string, string]),
+        '脚下带有黄 / 橙 / 红色光环，更强也更值钱，偶尔会掉落子弹。');
+      zombie('王', '#ff4a3a', BOSS.name, [['生命', `每阶段 ${fmtNum(BOSS.hpPerPhase)}，共 ${BOSS.phases} 阶段`], ['攻击', String(BOSS.atk)]],
+        '尸王广场的主人：会蓄力冲刺、连续投掷石块，血量降低时召唤精英丧尸，半血后狂暴。冲刺撞墙会眩晕。');
+      zombie('曼', '#c06aff', MAMBA.name, [['生命', fmtNum(MAMBA.hp)], ['攻击', String(MAMBA.atk)]],
+        '隐秘核心的主人：旋转激光、近身冲击波、大范围投石，狂暴后连续冲撞，并不断召唤精英丧尸。激光会被柱子挡住。');
+      zombie('箱', '#ffd24a', '奇物宝箱', [['生命', CHEST_HP.slice(2).map((v) => fmtNum(v)).join(' / ')]],
+        '完成区域任务后，下一个区域会出现奇物宝箱（生命值按第二 ~ 第五区递增）。它不会动也不会攻击，打破后掉落奇物。');
+      body.appendChild(grid);
+    } else if (tab === 'quest') {
+      body.appendChild(h('p', { style: 'color:#8d939a;margin:0 0 8px' }, '第一 ~ 第四区各有一项区域任务，从下面 5 种里抽取 4 种，不会重复。完成任务后，下一个区域会出现奇物宝箱。'));
+      const grid = h('div', { class: 'cx-grid' });
+      const A = QUEST.arrow;
+      const arrow: Record<string, string> = { signal: `${A.signal} 秒`, mutant: `${A.mutant} 秒`, cargo: `${A.cargo} 秒（运载点）`, pyre: '无', miasma: '无' };
+      const glyph: Record<string, string> = { signal: '信', pyre: '火', mutant: '异', cargo: '运', miasma: '瘴' };
+      for (const id of QUEST_IDS) {
+        const q = QUEST_INFO[id];
+        grid.appendChild(card(glyphIcon(glyph[id], q.color), h('b', { class: 'cx-t', style: `color:${q.color}` }, q.name),
+          h('div', { class: 'cx-row' }, stat('方向箭头', arrow[id])), h('div', { class: 'cx-eff' }, q.desc)));
+      }
+      body.append(grid, h('p', { style: 'color:#8d939a;margin:8px 0 0' }, `离开安全屋一段时间后，或者找到过目标之后，屏幕边缘会显示目标的方向。奇物宝箱在离开安全屋 ${A.chest} 秒后显示方向。`));
+    } else if (tab === 'relic') {
+      body.appendChild(h('p', { style: 'color:#8d939a;margin:0 0 8px' }, '打破奇物宝箱会掉落奇物。任何人捡起奇物后，每个人都能从随机的三个增益中选择一个。增益是全局的，不管拿着什么枪都会生效，同一个增益不会重复出现。'));
+      const grid = h('div', { class: 'cx-grid' });
+      for (const id of RELIC_IDS) {
+        const d = RELICS[id];
+        grid.appendChild(card(relicIcon(id), h('b', { class: 'cx-t', style: `color:${d.color}` }, d.name), h('div', { class: 'cx-eff' }, d.desc)));
+      }
+      body.appendChild(grid);
     } else {
       const K = this.settings.keys;
       const V = ITEM_VALUES;

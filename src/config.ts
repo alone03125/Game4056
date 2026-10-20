@@ -208,6 +208,16 @@ export const COOP = {
   closeGrace: 5, // 有队友倒在外面时，安全屋关门前的等待时间（自定）
 };
 
+/** 第4.1次调整：商店祭坛的全局强化零件1型最多叠加到 +1.60x */
+export const GLOBAL_ATK_MAX = 1.6;
+
+/** 第4.1次调整：异变体（区域任务“击杀异变体”）——生命 ×24、攻击 ×4、移速 ×0.8，不会被回收；金币 ×8（自定） */
+export const MUTANT = { hp: 24, atk: 4, speed: 0.8, gold: 8 };
+
+/** 第4.1次调整：奇物宝箱的生命值（按所在区域：第二 ~ 第五区） */
+export const CHEST_HP = [0, 0, 500, 1000, 2000, 3000];
+export const CHEST_R = 0.95;
+
 /** 防护服最高等级（第3次调整：4 区安全屋也提供一次升级，最高 V 级） */
 export const SUIT_MAX = 5;
 /** 第3次调整：枪械参数的硬下限（无论经过多少强化） */
@@ -233,7 +243,8 @@ export interface AltarOption { id: AltarId; name: string; values: [number, numbe
 export const ALTAR: AltarOption[] = [
   { id: 'hp', name: '强化血清（生命）', values: [15, 25, 35, 45], fmt: (v) => `增加 ${v} 生命值和上限` },
   { id: 'spd', name: '强化血清（脚力）', values: [7, 10, 13, 16], fmt: (v) => `增加 ${v}% 移动速度` },
-  { id: 'atk', name: '全局强化零件1型', values: [0.12, 0.18, 0.24, 0.30], fmt: (v) => `现有的所有枪增加 ${v.toFixed(2)}x 攻击倍率` },
+  // 第4.1次调整：改为全局增益——现有的以及之后拿到的所有枪（包括地图里、商店里的）都会生效，最多叠加到 +1.60x
+  { id: 'atk', name: '全局强化零件1型', values: [0.10, 0.14, 0.17, 0.20], fmt: (v) => `所有枪（包括之后拿到的）攻击倍率 +${v.toFixed(2)}x` },
   { id: 'cap', name: '全局强化零件3型', values: [1, 1, 2, 2], fmt: (v) => `现有的所有枪增加 ${v} 最大载弹量` },
   { id: 'recoil', name: '下盘功夫', values: [9, 12, 15, 18], fmt: (v) => `受到的后坐力影响 -${v}%` },
   { id: 'purify', name: '净化血清', values: [3, 6, 9, 14], fmt: (v) => `减少 ${v}K 辐射值` },

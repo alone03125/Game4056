@@ -1,10 +1,17 @@
-// 规则测试：第3次调整（枪械修饰语、参数硬下限、道具前缀、Rarity5、金币公式）与第4次调整（盲盒、玉米粒、苦力怕、奇点吸引投掷物、安全屋试枪、拉起无敌）。
+// 规则测试：第3次调整（枪械修饰语、参数硬下限、道具前缀、Rarity5、金币公式）与第4次调整（盲盒、玉米粒、苦力怕、奇点吸引投掷物、安全屋试枪、拉起无敌），
+// 以及第4.1次调整（权重、新模块、全局强化零件1型、招财弹、临时整备区、区域任务、奇物宝箱与奇物、联机本地判定碰撞伤害）。
 // 用法：npx esbuild tools/modtest.ts --bundle --platform=node --outfile=tools/.modtest.cjs && node tools/.modtest.cjs
 import { RunState } from '../src/game/state';
 import { World } from '../src/game/world';
 import { nullFx } from '../src/game/fx';
-import { BULLETS, makeBullet } from '../src/data/bullets';
+import { BULLETS, BULLET_IDS, BulletId, makeBullet } from '../src/data/bullets';
 import { GUN_MODS, gunStats, makeFixedGun, makeGun, rollRarity } from '../src/data/guns';
+import { altarBuy, altarValue, buyBullet, buyGun } from '../src/game/shop';
+import { bulletToSlot, moveItem } from '../src/game/inventory';
+import { QUEST, QUEST_IDS, questOrder, QuestId } from '../src/game/quest';
+import { Coop } from '../src/net/coop';
+import { isNormalZombie } from '../src/game/enemies';
+import { MemHub } from '../src/net/transport';
 import { itemValue, makeConsumable, rollGrade } from '../src/data/items';
 import { CREEPER, enhanceCoef, ZONES } from '../src/config';
 import { Rng } from '../src/util/rng';
@@ -257,5 +264,300 @@ const fireOnce = (w: World, defs: string[], hand = 0) => {
   w2.player.downed = true;
   w2.revived('队友');
   check('被拉起后 4 秒无敌', Math.abs(w2.run.invulnT - 4) < 1e-9, String(w2.run.invulnT));
+}
+// —— 第4.1次调整 ——
+const freshGun = (defs: (string | null)[], cap = defs.length, delay = 0.3) => {
+  const rng = new Rng(31);
+  const g = makeFixedGun('测试', 'T-1', 2, 1, delay, cap, 0, 1, rng);
+  g.bullets = defs.map((d) => {
+    if (!d) return null;
+    const b = makeBullet(d as any, rng, 1);
+    b.shiny = false; b.iri = false; b.atk = BULLETS[b.def].atk;
+    return b;
+  });
+  while (g.bullets.length < cap) g.bullets.push(null);
+  return g;
+};
+const pushBag = (w: World, id: string) => { const b = makeBullet(id as BulletId, new Rng(3), 1); w.run.bag.push(b); return b.uid; };
+/** 打完一整轮弹匣，返回射出的子弹数（fireOne 的次数）与期间生成的投射物 */
+const fireMag = (w: World, g: ReturnType<typeof freshGun>) => {
+  w.projs.clear();
+  w.run.guns = [g, null];
+  w.player.resetHands();
+  w.input.aimX = w.player.x + 10; w.input.aimY = w.player.y;
+  w.input.fire = [true, false];
+  const shots0 = w.run.stats.shotsFired;
+  const projs: any[] = [];
+  const seen = new Set<any>();
+  for (let i = 0; i < 300; i++) {
+    w.update(1 / 60, true);
+    for (const p of w.projs.list) if (!seen.has(p) && !p.dead) { seen.add(p); projs.push({ dmg: p.dmg, fancy: p.fancy, id: p.def.id }); }
+    if (w.player.hands[0].reloading) break;
+  }
+  w.input.fire = [false, false];
+  return { shots: w.run.stats.shotsFired - shots0, projs };
+};
+// 14. 权重：已有的子弹与模块都是 10，闪耀虹彩 / 循环 / 熔炼模块是 5
+{
+  const old = BULLET_IDS.filter((id) => !['mShine', 'mLoop', 'mSmelt'].includes(id));
+  check('已有子弹与未特别说明的模块权重为 10', old.every((id) => BULLETS[id].weight === 10));
+  check('闪耀虹彩 / 循环 / 熔炼模块权重为 5', ['mShine', 'mLoop', 'mSmelt'].every((id) => BULLETS[id as BulletId].weight === 5));
+  check('新增 8 种逻辑模块', ['mShine', 'mLoop', 'mShort', 'mPre', 'mStrip', 'mSmelt', 'mSplit2', 'mCopy'].every((id) => BULLET_IDS.includes(id as BulletId) && BULLETS[id as BulletId].logic));
+}
+// 15. 全局强化零件1型：对之后拿到的枪也生效，最多 +1.60x
+{
+  const w = freshWorld();
+  w.debugAdvance();
+  w.run.bank = 1e7;
+  for (let i = 0; i < 20; i++) altarBuy(w.run, 'atk', 1);
+  check('全局攻击倍率加成最多 +1.60x', Math.abs(w.run.globalAtk - 1.6) < 1e-9, String(w.run.globalAtk));
+  check('达到上限后不能再买', !!altarBuy(w.run, 'atk', 1));
+  const g = makeGun(3, new Rng(5));
+  check('之后拿到的枪也获得加成', Math.abs(w.run.handStats(g).atk - (g.atk + 1.6) * (g.mod ? GUN_MODS[g.mod].dmg ?? 1 : 1)) < 1e-9);
+  check('第一区安全屋的数值为 0.10x', altarValue('atk', 1) === 0.1 && altarValue('atk', 4) === 0.2);
+}
+// 16. 新模块
+{
+  const w = freshWorld();
+  (w as any).__god = true;
+  const loop = fireMag(w, freshGun(['mLoop', 'std', 'brass', 'light']));
+  check('循环模块：A、B+A、C+A 共射出 5 发', loop.shots === 5, String(loop.shots));
+  const smelt = fireMag(w, freshGun(['mSmelt', 'std', 'lead']));
+  check('熔炼模块：两发合成一发', smelt.shots === 1, String(smelt.shots));
+  check('熔炼模块：攻击力相加', smelt.projs.length > 0 && Math.abs(smelt.projs[0].dmg - (60 + 120)) < 0.5, smelt.projs[0]?.dmg?.toFixed(1));
+  const copy = fireMag(w, freshGun(['std', 'mCopy']));
+  check('复制模块：视为上一发子弹', copy.shots === 2 && copy.projs.every((p) => p.id === 'std'), `${copy.shots}`);
+  const st = gunStats(freshGun(['light', 'mCopy']));
+  check('复制模块：枪械数值影响再生效一次', Math.abs(st.delay - Math.max(0.05, 0.3 - 0.12)) < 1e-9, st.delay.toFixed(2));
+  const split = fireMag(w, freshGun(['mSplit2', 'std']));
+  check('二重分裂模块：射出 2 枚', split.projs.length === 2, String(split.projs.length));
+  const shine = fireMag(w, freshGun(['mShine', 'std']));
+  check('闪耀虹彩模块：伤害 ×1.25×1.6、带特效', shine.projs.length === 1 && Math.abs(shine.projs[0].dmg - 60 * 1.25 * 1.6) < 0.5 && shine.projs[0].fancy === 3, shine.projs[0]?.dmg?.toFixed(1));
+  const g = freshGun(['mPre', 'std']);
+  const pre = gunStats(g);
+  check('预行程模块：换弹 -30%、攻击倍率 -0.20x', Math.abs(pre.reload - Math.max(0.25, g.reload * 0.7)) < 1e-9 && Math.abs(pre.atk - 0.8) < 1e-9, `${g.reload} → ${pre.reload}`);
+  const strip = freshGun(['std', 'std', null, null, null, null]);
+  w.run.guns = [strip, null];
+  const uid = pushBag(w, 'mStrip');
+  check('拆卸模块：装入后载弹量减半', bulletToSlot(w.run, { from: 'bag', uid }, strip.uid, 2) === null && gunStats(strip).cap === 3);
+  check('拆卸模块：射击延迟 -0.25s', gunStats(strip).delay === 0.05);
+  check('装满一半后不能再装子弹', !!bulletToSlot(w.run, { from: 'bag', uid: pushBag(w, 'std') }, strip.uid, 3));
+  const full = freshGun(['std', 'std', 'std', null, null, null]);
+  w.run.guns = [full, null];
+  check('已经装了超过一半时无法装入拆卸模块', !!bulletToSlot(w.run, { from: 'bag', uid: pushBag(w, 'mStrip') }, full.uid, 3));
+  // 短行程模块：90% 减半 / 10% 变为 4 倍
+  let half = 0;
+  const hs = w.player.hands[0];
+  for (let i = 0; i < 4000; i++) { w.player.startReload(0, hs, 2, 1); if (hs.reloadTotal < 1.5) half++; }
+  check('短行程模块：约 90% 换弹时间减半', Math.abs(half / 4000 - 0.9) < 0.02, `${((half / 4000) * 100).toFixed(1)}%`);
+}
+// 17. 招财弹：被击杀的丧尸必定掉落道具，每区最多 4 次
+{
+  const w = freshWorld();
+  w.zoneStarted = false;
+  const items0 = w.pickups.items.filter((i) => !i.dead).length;
+  for (let i = 0; i < 6; i++) {
+    const e = w.enemies.spawn('office', w.player.x + 6 + i, w.player.y + 4, 0);
+    w.enemies.damage(e, 1e6, { gold: true });
+  }
+  const got = w.pickups.items.filter((i) => !i.dead).length - items0;
+  check('招财弹：每区最多掉落 4 件道具', got === 4, String(got));
+}
+// 18. 临时整备区：背包满时买的东西进临时整备区，关闭界面 / 离开安全屋时掉在地上
+{
+  const w = freshWorld();
+  w.debugAdvance();
+  w.run.bank = 1e6;
+  while (w.run.canFit(1)) w.run.bag.push(makeBullet('std', new Rng(1)));
+  const shop = w.shop!;
+  check('背包满时买子弹进入临时整备区', buyBullet(w.run, shop, 0) === null && w.run.temp.length === 1);
+  check('背包满时买枪进入临时整备区', buyGun(w.run, shop, 0) === null && w.run.temp.length === 2);
+  const n0 = w.pickups.items.filter((i) => !i.dead).length;
+  w.flushTemp();
+  check('关闭界面后掉在地上', w.run.temp.length === 0 && w.pickups.items.filter((i) => !i.dead).length === n0 + 2);
+  const b = w.run.bag.find((x) => x.kind === 'bullet')!;
+  check('物品可以在背包和临时整备区之间移动', moveItem(w.run, b.uid, 'bag', 'temp') === null && w.run.temp.length === 1);
+  w.debugAdvance();
+  check('离开安全屋时临时整备区清空', w.run.temp.length === 0);
+}
+// 19. 区域任务
+const questWorld = (id: QuestId) => {
+  const run = new RunState(7, 'normal');
+  const w = new World(run, nullFx, { damageNumbers: false }, ev);
+  (w.quests as any).order = [id, id, id, id];
+  w.start();
+  (w as any).__god = true;
+  return w;
+};
+const tick = (w: World, sec: number, each?: () => void) => { for (let i = 0; i < sec * 60; i++) { each?.(); w.update(1 / 60, true); } };
+{
+  const order = questOrder(1234);
+  check('任务：每局 4 个互不相同的任务', order.length === 4 && new Set(order).size === 4 && order.every((q) => QUEST_IDS.includes(q)));
+  check('任务：同一种子结果相同', questOrder(1234).join() === order.join());
+  // 发送信号
+  const w = questWorld('signal');
+  const q = w.quests;
+  check('发送信号：信号区域可以到达', w.nav.reachable(q.sig.x, q.sig.y) && !w.col.overlapsCircle(q.sig.x, q.sig.y, 0.5));
+  w.player.place(q.sig.x, q.sig.y);
+  tick(w, 10, () => w.enemies.clearAll());
+  check('发送信号：站在圈里进度增加', Math.abs(q.progress - 10) < 0.2, q.progress.toFixed(2));
+  check('发送信号：圈会随进度缩小', q.sig.r < QUEST.signalR - 0.5, q.sig.r.toFixed(2));
+  w.player.place(q.sig.x + 20, q.sig.y);
+  if (w.col.overlapsCircle(w.player.x, w.player.y, 0.5)) w.player.place(w.layout.startPos.x, w.layout.startPos.y);
+  tick(w, 4, () => w.enemies.clearAll());
+  check('发送信号：离开后以 75% 的速度回退', Math.abs(q.progress - 7) < 0.3, q.progress.toFixed(2));
+  w.player.place(q.sig.x, q.sig.y);
+  tick(w, 14, () => w.enemies.clearAll());
+  check('发送信号：20 秒后完成', q.done);
+  w.debugAdvance(); w.debugAdvance();
+  const chest = w.quests.chest();
+  check('完成任务后下一区出现奇物宝箱（第二区 500 生命）', !!chest && chest.maxHp === 500 && w.layout.index === 2, chest ? String(chest.maxHp) : 'none');
+  if (chest) {
+    w.enemies.damage(chest, 1e6, null);
+    const relic = w.pickups.items.find((i) => !i.dead && i.thing.kind === 'relic');
+    check('打破宝箱掉落奇物', !!relic);
+    if (relic) {
+      w.player.place(relic.x, relic.y);
+      tick(w, 0.2, () => w.enemies.clearAll());
+      const offer = w.relicFx.offer;
+      check('捡起奇物后出现三选一', !!offer && offer.length === 3, offer?.join(','));
+      if (offer) { w.relicFx.choose(offer[0]); check('选择后获得增益', w.run.relics.includes(offer[0]) && !w.relicFx.offer); }
+    }
+  }
+  check('宝箱不会被追踪子弹锁定', !w.enemies.nearest(w.player.x, w.player.y, 999, () => false) || w.enemies.nearest(w.player.x, w.player.y, 999)!.type !== 'chest');
+}
+{
+  const w = questWorld('pyre');
+  const q = w.quests;
+  check('点燃火堆：生成 7 个可燃物堆（作为障碍物）', q.pyres.length === 7 && w.layout.obstacles.filter((o) => o.kind === 'pyre').length === 7);
+  check('点燃火堆：都可以到达', q.pyres.every((p) => w.nav.reachable(p.x + 2.2, p.y) || w.nav.reachable(p.x - 2.2, p.y) || w.nav.reachable(p.x, p.y + 2.2) || w.nav.reachable(p.x, p.y - 2.2)));
+  // 用真实的子弹打可燃物堆
+  const p0 = q.pyres[0];
+  let ok = false;
+  for (const [dx, dy] of [[-4, 0], [4, 0], [0, -4], [0, 4]]) {
+    if (!w.nav.isFree(p0.x + dx, p0.y + dy)) continue;
+    w.player.place(p0.x + dx, p0.y + dy);
+    const g = freshGun(['std']);
+    w.run.guns = [g, null];
+    w.player.resetHands();
+    w.input.aimX = p0.x; w.input.aimY = p0.y; w.input.fire = [true, false];
+    tick(w, 1, () => w.enemies.clearAll());
+    w.input.fire = [false, false];
+    ok = p0.lit;
+    break;
+  }
+  check('点燃火堆：子弹打中可燃物堆会点燃它', ok);
+  for (const p of q.pyres.slice(1, 6)) q.onShot(p.x, p.y, 0.1);
+  tick(w, 0.1, () => w.enemies.clearAll());
+  check('点燃火堆：点燃 6 个后完成', q.done && q.litCount() === 6);
+}
+{
+  const w = questWorld('cargo');
+  const q = w.quests;
+  check('运送物资：3 个物资球与 1 个运载点', q.balls.length === 3 && w.nav.reachable(q.drop.x, q.drop.y));
+  const b = q.balls[0];
+  // 玩家推着球走
+  w.player.place(b.x - 1.0, b.y);
+  const x0 = b.x;
+  w.input.moveX = 1; w.input.moveY = 0;
+  tick(w, 0.5, () => w.enemies.clearAll());
+  w.input.moveX = 0;
+  check('运送物资：碰到物资球会推着它走', Math.abs(b.x - x0) > 0.5 || Math.abs(b.y - q.balls[0].y) > 0, `dx=${(b.x - x0).toFixed(2)}`);
+  b.x = q.drop.x - 3; b.y = q.drop.y; b.vx = 6; b.vy = 0;
+  tick(w, 1.5, () => w.enemies.clearAll());
+  check('运送物资：推进运载点后完成', q.done && b.done);
+}
+{
+  const w = questWorld('miasma');
+  const q = w.quests;
+  check('清除瘴气：主要道路被污染', !!q.mz && q.mz.total > 500, String(q.mz?.total));
+  const c0 = q.mz!.clean;
+  const st = w.layout.streets.find((s) => s.x1 - s.x0 >= 6 && s.x1 - s.x0 < 10)!;
+  const cx = (st.x0 + st.x1) / 2;
+  w.player.place(cx, st.y0 + 10);
+  w.input.moveY = 1;
+  tick(w, 3, () => w.enemies.clearAll());
+  w.input.moveY = 0;
+  check('清除瘴气：走过的道路被净化', q.mz!.clean > c0 + 30, String(q.mz!.clean - c0));
+  q.mz!.clean = Math.ceil(q.mz!.total * 0.34);
+  tick(w, 0.1, () => w.enemies.clearAll());
+  check('清除瘴气：单人净化 33% 后完成', q.done);
+}
+{
+  const w = questWorld('mutant');
+  const m = w.quests.mutant();
+  check('击杀异变体：生成异变体（不是苦力怕）', !!m && m.type !== 'creeper' && m.mutant && !m.recycle);
+  if (m) {
+    check('异变体：生命 ×24', m.maxHp > 100 * 0.6 * 24 * 0.8 * 0.9, m.maxHp.toFixed(0));
+    w.enemies.damage(m, 1e7, null);
+    check('击杀异变体后任务完成', w.quests.done);
+  }
+}
+// 20. 奇物
+{
+  const w = freshWorld();
+  const run = w.run;
+  const hp0 = run.maxHp, sp0 = w.player.speed();
+  w.relicFx.offer = ['might', 'crit', 'bow'];
+  w.relicFx.choose('might');
+  check('天生神力：生命上限 ×1.8、移速 ×1.8、碰撞范围 ×1.8', Math.abs(run.maxHp - hp0 * 1.8) < 1e-6 && Math.abs(w.player.speed() - sp0 * 1.8) < 1e-6 && Math.abs(w.player.r - 0.72) < 1e-9);
+  check('天生神力：攻击倍率 +0.80x', Math.abs(run.atkBonus() - 0.8) < 1e-9);
+  const g = run.guns[0]!;
+  const d0 = run.handStats(g, 0).delay;
+  run.relics.push('breath');
+  check('神息刀：主手射击延迟减半', Math.abs(run.handStats(g, 0).delay - Math.max(0.05, d0 / 2)) < 1e-9 && Math.abs(run.handStats(g, 1).delay - d0) < 1e-9);
+  run.relics.push('scepter');
+  run.bank = 10000;
+  check('王杖：每 100 金币 +0.01x', Math.abs(run.atkBonus() - 0.8 - 1.0) < 1e-9);
+  run.bank = 1e6;
+  check('王杖：最高 +2.00x', Math.abs(run.atkBonus() - 0.8 - 2.0) < 1e-9);
+  run.relics.push('shield');
+  let blocked = 0;
+  for (let i = 0; i < 4000; i++) { w.relicFx.shieldCd = 0; if (w.relicFx.blocks()) blocked++; }
+  check('圣盾：约 50% 免疫', Math.abs(blocked / 4000 - 0.5) < 0.03, String(blocked));
+  w.relicFx.shieldCd = 0;
+  for (let i = 0; i < 100 && !w.relicFx.blocks(); i++) w.relicFx.shieldCd = 0;
+  check('圣盾：5 秒内不会再次触发', !w.relicFx.blocks() && w.relicFx.shieldCd > 4.9);
+  run.relics.push('suit');
+  check('超级防护服：单人辐射 -33%', Math.abs(w.relicFx.radMul() - 0.67) < 1e-9);
+  const e = w.enemies.spawn('office', w.player.x + 8, w.player.y, 0);
+  check('要害一击：直接击杀普通丧尸', isNormalZombie(e) && w.enemies.damage(e, 1, { execute: true }) && e.dead);
+  const el = w.enemies.spawn('office', w.player.x + 8, w.player.y + 3, 2);
+  const cr = w.enemies.spawn('creeper', w.player.x + 8, w.player.y - 3, 0);
+  check('要害一击：精英、苦力怕不会被直接击杀', !isNormalZombie(el) && !isNormalZombie(cr));
+  const c = w.enemies.spawn('iron', w.player.x + 9, w.player.y - 3, 0);
+  w.enemies.damage(c, 100, { corrode: true });
+  const h1 = c.hp;
+  w.enemies.damage(c, 100, null);
+  check('腐蚀疗法：之后受到的伤害 +40%', Math.abs(h1 - c.hp - 140) < 1e-6, (h1 - c.hp).toFixed(1));
+  check('奇物不会重复出现', (() => { w.relicFx.offer = null; w.relicFx.grant(); return !!w.relicFx.offer && w.relicFx.offer.every((id) => !run.has(id)); })());
+}
+// 21. 联机：碰撞伤害由被打的玩家本地判定，再通知房主
+{
+  const hub = new MemHub();
+  const players = [{ id: 0, name: 'A' }, { id: 1, name: 'B' }];
+  const ws: World[] = [], coops: Coop[] = [];
+  for (const p of players) {
+    const end = hub.add(p.id);
+    const coop = new Coop(end, 0, players);
+    const w = new World(new RunState(99, 'normal', p.id), nullFx, { damageNumbers: false }, ev, coop);
+    coop.attach(w);
+    w.start(p.id);
+    ws.push(w); coops.push(coop);
+  }
+  const [host, cli] = ws;
+  host.zoneStarted = false;
+  host.enemies.clearAll();
+  const step = (n: number) => { for (let i = 0; i < n; i++) { hub.update(1 / 60); for (let k = 0; k < 2; k++) { ws[k].update(1 / 60, true); coops[k].tick(1 / 60); } } };
+  step(20);
+  const e = host.enemies.spawn('office', cli.player.x + 0.6, cli.player.y, 0);
+  e.speed = 0;
+  const hp0 = cli.run.hp;
+  for (let i = 0; i < 150 && cli.run.hp >= hp0; i++) step(1);
+  step(3);
+  const m = cli.enemies.byId.get(e.id);
+  check('联机：远程玩家本地判定被丧尸撞到', cli.run.hp < hp0 && !!m, `${hp0} → ${cli.run.hp.toFixed(1)}`);
+  check('联机：房主收到后让那只丧尸进入出手冷却', e.hitCd > 0.9, `hitCd=${e.hitCd.toFixed(2)}`);
+  check('联机：房主那边的血量同步', coops[0].remoteList()[0] && Math.abs(coops[0].remoteList()[0].hp - cli.run.hp) < 1);
 }
 console.log(fails ? `${fails} 项失败` : '全部通过');

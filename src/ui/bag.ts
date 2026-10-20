@@ -1,10 +1,13 @@
 // 背包界面：装备中的两把枪（子弹槽位）+ 背包物品。支持拖拽装填/卸下/换枪/丢弃/出售，右键快捷操作。
+// 第4.1次调整：
+// - 只能在安全屋里拆装枪械和子弹；在区域中只能丢弃背包里的物品和金币、使用道具。
+// - 安全屋里多了“临时整备区”：不限格数，方便拆下枪里的子弹；关闭背包或商店界面时，里面的物品全部掉在地上。
 
-import { PLAYER, RARITY_CSS, RARITY_NAMES } from '../config';
+import { RARITY_CSS, RARITY_NAMES } from '../config';
 import { Bullet, BULLETS, bulletName } from '../data/bullets';
-import { Gun, gunDps, gunStats } from '../data/guns';
+import { Gun, gunDps } from '../data/guns';
 import { BagItem, ITEM_GRADE, ITEMS, itemSize, itemName } from '../data/items';
-import { bulletToSlot, equipFromBag, findGun, slotToBag, swapHands, unequipToBag } from '../game/inventory';
+import { bulletToSlot, equipFrom, findGun, Holder, moveItem, slotTo, swapHands, unequipTo } from '../game/inventory';
 import { sellItem, sellPrice } from '../game/shop';
 import type { World } from '../game/world';
 import { fmtNum } from '../util/math';
@@ -14,6 +17,7 @@ import { bulletTip, goldTip, gunTip, itemTip, Tooltip } from './tooltip';
 
 type DragSrc =
   | { t: 'bag'; uid: number }
+  | { t: 'temp'; uid: number }
   | { t: 'slot'; gunUid: number; slot: number }
   | { t: 'hand'; hand: number }
   | { t: 'gold'; amount: number };
@@ -22,6 +26,9 @@ export interface BagCallbacks {
   sound(name: 'click' | 'denied' | 'pickup' | 'drop' | 'buy' | 'hover'): void;
   toast(text: string, color?: string): void;
 }
+
+/** 在区域里拆装枪械时的提示 */
+const LOCKED = '只能在安全屋里拆装枪械和子弹';
 
 export class BagView {
   root: HTMLDivElement;
@@ -53,9 +60,20 @@ export class BagView {
   }
 
   setOpen(v: boolean): void {
+    const was = this.open;
     this.root.classList.toggle('hidden', !v);
     if (v) { this.sig = ''; this.refresh(); }
-    else { this.tip.hide(); this.cancelDrag(); }
+    else {
+      this.tip.hide();
+      this.cancelDrag();
+      // 第4.1次调整：关闭背包时，临时整备区里的物品掉在地上
+      if (was && !this.embedded) this.getWorld()?.flushTemp();
+    }
+  }
+
+  /** 是否处于安全屋（可以拆装枪械与使用临时整备区） */
+  private inSafe(w: World): boolean {
+    return w.phase === 'safehouse';
   }
 
   /** 内容变化时重绘 */
@@ -63,8 +81,9 @@ export class BagView {
     const w = this.getWorld();
     if (!w) return;
     const run = w.run;
-    const sig = [run.guns.map((g) => g ? g.uid + ':' + g.bullets.map((b) => b?.uid ?? 0).join('.') + ':' + g.cap + ':' + g.atk + ':' + g.reload : '-').join('|'),
-      run.bag.map((b) => b.uid + (b.kind === 'gun' ? ':' + b.bullets.map((x) => x?.uid ?? 0).join('.') : '')).join(','), run.gold, run.bagCap, run.overheatT > 0, run.bank, this.sellMode].join('#');
+    const items = (list: BagItem[]) => list.map((b) => b.uid + (b.kind === 'gun' ? ':' + b.bullets.map((x) => x?.uid ?? 0).join('.') : '')).join(',');
+    const sig = [run.guns.map((g, i) => g ? g.uid + ':' + g.bullets.map((b) => b?.uid ?? 0).join('.') + ':' + g.cap + ':' + run.handStats(g, i).atk.toFixed(2) + ':' + g.reload : '-').join('|'),
+      items(run.bag), items(run.temp), run.gold, run.bagCap, run.bank, this.sellMode, this.inSafe(w)].join('#');
     if (!force && sig === this.sig) return;
     this.sig = sig;
     this.render(w);
@@ -72,29 +91,34 @@ export class BagView {
 
   private render(w: World): void {
     const run = w.run;
+    const safe = this.inSafe(w);
     clear(this.panel);
     const used = run.bagUsed(), cap = run.bagCap;
+    const unit = run.goldUnit();
     const capBar = h('div', { class: 'cap-bar' });
     let itemUnits = 0;
     for (const it of run.bag) itemUnits += itemSize(it);
-    const goldUnits = Math.ceil(run.gold / PLAYER.goldPerUnit);
+    const goldUnits = Math.ceil(run.gold / unit);
     for (let i = 0; i < cap; i++) capBar.appendChild(h('i', { class: i < itemUnits ? 'u' : i < itemUnits + goldUnits ? 'g' : '' }));
     const free = cap - used;
     const capColor = free <= 0 ? '#ff3a2a' : free <= 5 ? '#ff9a2a' : '#e6e2da';
     if (!this.embedded) {
       this.panel.appendChild(h('div', { class: 'bag-title' },
         h('h2', null, '背包'),
-        h('div', { class: 'note' }, `打开背包时游戏暂停${w.net ? '（联机时所有队友都会暂停）' : ''}　拖拽子弹装填　拖出面板丢弃　右键快捷操作　再按一次关闭`)));
+        h('div', { class: 'note' }, safe
+          ? '拖拽子弹装填　拖出面板丢弃　右键快捷操作　再按一次关闭'
+          : `打开背包时游戏暂停${w.net ? '（联机时所有队友都会暂停）' : ''}　拖出面板丢弃　右键使用道具　再按一次关闭`)));
     }
     // 左：装备
     const left = h('div', null, h('div', { class: 'col-h' }, h('span', null, '装备中（装填的子弹不占背包空间）'),
-      h('button', { class: 'btn small', onclick: () => { swapHands(w.run); this.cb.sound('click'); this.refresh(true); } }, '⇄ 交换主副手')));
+      h('button', { class: 'btn small', disabled: !safe, onclick: () => { if (!safe) return; swapHands(w.run); this.cb.sound('click'); this.refresh(true); } }, '⇄ 交换主副手')));
+    if (!safe) left.appendChild(h('div', { class: 'lock-note' }, `${LOCKED}；在区域中只能丢弃背包里的物品和金币、使用道具。`));
     for (let hand = 0; hand < 2; hand++) left.appendChild(this.equipCard(w, hand));
-    // 右：背包（第3次调整：携带的金币以“金币堆”的形式占用背包格子，每堆最多 1750，可以丢掉来腾出空间）
+    // 右：背包（第3次调整：携带的金币以“金币堆”的形式占用背包格子，可以丢掉来腾出空间）
     const grid = h('div', { class: 'bag-grid', 'data-drop': 'bag' });
-    for (const it of run.bag) grid.appendChild(this.itemCard(it));
+    for (const it of run.bag) grid.appendChild(this.itemCard(it, 'bag'));
     for (let i = 0; i < goldUnits; i++) {
-      const amt = i < goldUnits - 1 ? PLAYER.goldPerUnit : run.gold - PLAYER.goldPerUnit * (goldUnits - 1);
+      const amt = i < goldUnits - 1 ? unit : run.gold - unit * (goldUnits - 1);
       grid.appendChild(this.goldCard(amt));
     }
     if (run.bag.length === 0 && goldUnits === 0) grid.appendChild(h('div', { style: 'grid-column:span 4;color:#666;font-size:12px;text-align:center;padding:30px 0' }, '背包是空的'));
@@ -104,6 +128,15 @@ export class BagView {
       h('div', { class: 'bag-foot' },
         h('span', null, run.gold > 0 ? `携带 ${fmtNum(run.gold)} 金币` : '未携带金币'),
         h('span', null, `已暂存 ${fmtNum(run.bank)} 金币`)));
+    // 第4.1次调整：临时整备区（只在安全屋里出现）
+    if (safe) {
+      const tg = h('div', { class: 'temp-grid', 'data-drop': 'temp' });
+      for (const it of run.temp) tg.appendChild(this.itemCard(it, 'temp'));
+      if (!run.temp.length) tg.appendChild(h('div', { class: 'temp-empty' }, '把枪里的子弹、背包里放不下的东西拖到这里'));
+      right.append(
+        h('div', { class: 'col-h', style: 'margin-top:12px' }, h('span', { style: 'color:#ffb03a' }, '临时整备区（不限格数）'), h('span', { style: 'color:#8a7a5a' }, '关闭界面时会掉在地上')),
+        tg);
+    }
     if (this.sellMode) right.appendChild(h('div', { class: 'sell-zone', 'data-drop': 'sell' }, '把物品拖到这里出售（约为价值的三成）'));
     this.panel.appendChild(h('div', { class: 'bag-cols' }, left, right));
   }
@@ -119,7 +152,7 @@ export class BagView {
       return card;
     }
     card.style.borderLeftColor = RARITY_CSS[g.rarity];
-    const st = gunStats(g, run.overheatT > 0 ? 3 : 0);
+    const st = run.handStats(g, hand);
     const cmp = (base: number, eff: number, lowerBetter: boolean, unit: string, d = 2) => {
       const same = Math.abs(base - eff) < 0.005;
       const better = lowerBetter ? eff < base : eff > base;
@@ -130,22 +163,24 @@ export class BagView {
         h('img', { src: gunIcon(g), draggable: 'false' }),
         h('div', null,
           h('div', { class: 'equip-name', style: `color:${RARITY_CSS[g.rarity]}` }, `${g.model} ${g.name}`),
-          h('div', { class: 'equip-sub' }, `${keyName}　${RARITY_NAMES[g.rarity]}　DPS≈${gunDps(g, run.overheatT > 0 ? 3 : 0).toFixed(0)}`))),
+          h('div', { class: 'equip-sub' }, `${keyName}　${RARITY_NAMES[g.rarity]}　DPS≈${gunDps(g, run.atkBonus()).toFixed(0)}`))),
       h('div', { class: 'equip-stats' },
         h('span', null, '攻击 ', cmp(g.atk, st.atk, false, 'x')),
         h('span', null, '延迟 ', cmp(g.delay, st.delay, true, 's')),
         h('span', null, '换弹 ', cmp(g.reload, st.reload, true, 's')),
-        h('span', null, '载弹 ', h('b', null, `${st.loaded}/${g.cap}`)),
+        h('span', null, '载弹 ', h('b', { style: st.cap < g.cap ? 'color:#ff9a6a' : '' }, `${st.loaded}/${st.cap}`)),
         h('span', null, '散射 ', h('b', { style: `color:${st.spread > 0 ? '#ff8a6a' : '#6aff8a'}` }, `${st.spread.toFixed(0)}°`), Math.abs(st.spread - g.spread) > 0.5 ? h('span', { style: 'color:#666' }, ` (${g.spread}°)`) : '')),
     );
     const slots = h('div', { class: 'slots' });
-    g.bullets.forEach((b, k) => slots.appendChild(this.slotEl(g, k, b)));
+    // 拆卸模块让载弹量减半：装满实际载弹量后，剩下的空槽不可用
+    const full = st.loaded >= st.cap;
+    g.bullets.forEach((b, k) => slots.appendChild(this.slotEl(g, k, b, !b && full)));
     card.appendChild(slots);
     return card;
   }
 
-  private slotEl(g: Gun, k: number, b: Bullet | null): HTMLDivElement {
-    const s = h('div', { class: 'slot' + (b ? ' filled' : '') + (b?.shiny ? ' shiny' : '') + (b?.iri ? ' iri' : ''), 'data-drop': 'slot', 'data-gun': g.uid, 'data-slot': k }, h('span', { class: 'idx' }, String(k + 1)));
+  private slotEl(g: Gun, k: number, b: Bullet | null, off: boolean): HTMLDivElement {
+    const s = h('div', { class: 'slot' + (b ? ' filled' : '') + (b?.shiny ? ' shiny' : '') + (b?.iri ? ' iri' : '') + (off ? ' off' : ''), 'data-drop': 'slot', 'data-gun': g.uid, 'data-slot': k }, h('span', { class: 'idx' }, String(k + 1)));
     if (b) {
       s.setAttribute('data-drag', 'slot');
       s.setAttribute('data-tip', 'slot');
@@ -155,7 +190,7 @@ export class BagView {
     return s;
   }
 
-  private itemCard(it: BagItem): HTMLDivElement {
+  private itemCard(it: BagItem, holder: Holder): HTMLDivElement {
     const size = itemSize(it);
     let el: HTMLDivElement;
     if (it.kind === 'gun') {
@@ -171,10 +206,10 @@ export class BagView {
       el = h('div', { class: 'item' + (size >= 3 ? ' big' : '') + (g ? ` grade${g}` : '') }, h('img', { src: itemIcon(it.id), draggable: 'false' }),
         h('div', { class: 'nm', style: `color:${ITEMS[it.id].color}` }, g ? h('span', { style: `color:${ITEM_GRADE.color[g]}` }, ITEM_GRADE.names[g] + ' ') : null, ITEMS[it.id].name));
     }
-    el.setAttribute('data-drag', 'bag');
+    el.setAttribute('data-drag', holder);
     el.setAttribute('data-uid', String(it.uid));
-    el.setAttribute('data-tip', 'bag');
-    el.appendChild(h('span', { class: 'sz' }, `${size}格`));
+    el.setAttribute('data-tip', holder);
+    el.appendChild(h('span', { class: 'sz' }, holder === 'temp' ? '临时' : `${size}格`));
     return el;
   }
 
@@ -195,25 +230,28 @@ export class BagView {
     if (!el) { this.tip.hide(); return; }
     const kind = el.getAttribute('data-tip');
     const run = w.run;
+    const safe = this.inSafe(w);
     const act = (s: string) => `<div class="act">${s}</div>`;
-    if (kind === 'bag') {
-      const it = run.bag.find((b) => b.uid === Number(el.getAttribute('data-uid')));
+    if (kind === 'bag' || kind === 'temp') {
+      const list = kind === 'bag' ? run.bag : run.temp;
+      const it = list.find((b) => b.uid === Number(el.getAttribute('data-uid')));
       if (!it) return;
-      let a = '拖拽：移动　拖出面板：丢弃';
-      if (it.kind === 'bullet') a = '拖到枪的槽位：装填　右键：自动装填';
-      if (it.kind === 'gun') a = '拖到装备栏：装备　右键：装备';
+      let a = '拖出面板：丢弃';
+      if (it.kind === 'bullet') a = safe ? '拖到枪的槽位：装填　右键：自动装填' : `拖出面板：丢弃（${LOCKED}）`;
+      if (it.kind === 'gun') a = safe ? '拖到装备栏：装备　右键：装备' : `拖出面板：丢弃（${LOCKED}）`;
       if (it.kind === 'item' && ITEMS[it.id].usable) a = '右键：使用　拖出面板：丢弃';
+      if (kind === 'temp' && it.kind === 'item') a = '拖到背包：放回背包　右键：放回背包';
       if (this.sellMode) a += `　出售价 ${sellPrice(it)}`;
       this.tip.show(itemTip(it, run, act(a)), e.clientX, e.clientY);
     } else if (kind === 'slot') {
       const g = findGun(run, Number(el.getAttribute('data-gun')));
       const b = g?.bullets[Number(el.getAttribute('data-slot'))];
-      if (b) this.tip.show(bulletTip(b, run, act('拖拽：换位/卸下　右键：卸下到背包')), e.clientX, e.clientY);
+      if (b) this.tip.show(bulletTip(b, run, act(safe ? '拖拽：换位/卸下　右键：卸下到背包' : LOCKED)), e.clientX, e.clientY);
     } else if (kind === 'hand') {
       const g = run.guns[Number(el.getAttribute('data-hand'))];
-      if (g) this.tip.show(gunTip(g, run, act('拖到另一只手：交换　拖到背包：卸下　右键：卸下')), e.clientX, e.clientY);
+      if (g) this.tip.show(gunTip(g, run, act(safe ? '拖到另一只手：交换　拖到背包：卸下　右键：卸下' : LOCKED), Number(el.getAttribute('data-hand'))), e.clientX, e.clientY);
     } else if (kind === 'gold') {
-      this.tip.show(goldTip(Number(el.getAttribute('data-amt'))), e.clientX, e.clientY);
+      this.tip.show(goldTip(Number(el.getAttribute('data-amt')), run.goldUnit()), e.clientX, e.clientY);
     }
   }
 
@@ -224,10 +262,10 @@ export class BagView {
     if (!el || !this.panel.contains(el)) return;
     const t = el.getAttribute('data-drag');
     let src: DragSrc | null = null;
-    if (t === 'bag') src = { t: 'bag', uid: Number(el.getAttribute('data-uid')) };
+    if (t === 'bag' || t === 'temp') src = { t, uid: Number(el.getAttribute('data-uid')) };
     else if (t === 'slot') src = { t: 'slot', gunUid: Number(el.getAttribute('data-gun')), slot: Number(el.getAttribute('data-slot')) };
     else if (t === 'hand') src = { t: 'hand', hand: Number(el.getAttribute('data-hand')) };
-    else if (t === 'gold') src = { t: 'gold', amount: Number(el.getAttribute('data-amt')) || PLAYER.goldPerUnit };
+    else if (t === 'gold') src = { t: 'gold', amount: Number(el.getAttribute('data-amt')) || 1 };
     if (!src) return;
     e.preventDefault();
     this.drag = { src, x0: e.clientX, y0: e.clientY, ghost: null, moved: false };
@@ -264,28 +302,33 @@ export class BagView {
     return el.closest<HTMLElement>('[data-drop]');
   }
 
+  private findItem(w: World, src: DragSrc): BagItem | null {
+    if (src.t === 'bag') return w.run.bag.find((b) => b.uid === src.uid) ?? null;
+    if (src.t === 'temp') return w.run.temp.find((b) => b.uid === src.uid) ?? null;
+    return null;
+  }
+
   private makeGhost(src: DragSrc): HTMLDivElement | null {
     const w = this.getWorld();
     if (!w) return null;
     const run = w.run;
-    let img = '', gun = false;
-    if (src.t === 'bag') {
-      const it = run.bag.find((b) => b.uid === src.uid);
+    let img = '', gun = false, fancy = '';
+    if (src.t === 'bag' || src.t === 'temp') {
+      const it = this.findItem(w, src);
       if (!it) return null;
       if (it.kind === 'gun') { img = gunIcon(it); gun = true; }
-      else img = it.kind === 'bullet' ? bulletIcon(it.def) : itemIcon(it.id);
+      else if (it.kind === 'bullet') { img = bulletIcon(it.def); fancy = (it.shiny ? ' shiny' : '') + (it.iri ? ' iri' : ''); }
+      else img = itemIcon(it.id);
     } else if (src.t === 'slot') {
       const b = findGun(run, src.gunUid)?.bullets[src.slot];
       if (!b) return null;
       img = bulletIcon(b.def);
+      fancy = (b.shiny ? ' shiny' : '') + (b.iri ? ' iri' : '');
     } else if (src.t === 'hand') {
       const g = run.guns[src.hand];
       if (!g) return null;
       img = gunIcon(g); gun = true;
     } else img = goldIcon();
-    let fancy = '';
-    if (src.t === 'bag') { const it = run.bag.find((b) => b.uid === src.uid); if (it?.kind === 'bullet') fancy = (it.shiny ? ' shiny' : '') + (it.iri ? ' iri' : ''); }
-    else if (src.t === 'slot') { const b = findGun(run, src.gunUid)?.bullets[src.slot]; if (b) fancy = (b.shiny ? ' shiny' : '') + (b.iri ? ' iri' : ''); }
     // 特效放在内层：外层是 position:fixed 的拖拽容器，不能被特效样式覆盖
     return h('div', { class: 'drag-ghost' + (gun ? ' gun' : '') }, h('div', { class: 'ghost-fx' + fancy }, h('img', { src: img })));
   }
@@ -313,40 +356,49 @@ export class BagView {
     this.refresh(true);
   }
 
+  /** 拖动的是装备中的枪械或枪里的子弹 */
+  private touchesLoadout(src: DragSrc): boolean {
+    return src.t === 'slot' || src.t === 'hand';
+  }
+
   private apply(w: World, src: DragSrc, tgt: HTMLElement | null, outside: boolean): string | null {
     const run = w.run;
+    const safe = this.inSafe(w);
     if (outside) return this.dropOut(w, src);
     if (!tgt) return null;
     const kind = tgt.getAttribute('data-drop');
     if (kind === 'sell') {
       let uid = -1;
-      if (src.t === 'bag') uid = src.uid;
+      if (src.t === 'bag' || src.t === 'temp') uid = src.uid;
       else if (src.t === 'slot') {
         const g = findGun(run, src.gunUid);
         const b = g?.bullets[src.slot];
         if (!g || !b) return null;
         g.bullets[src.slot] = null;
-        run.bag.push(b);
+        run.temp.push(b);
         uid = b.uid;
       } else if (src.t === 'hand') {
         const g = run.guns[src.hand];
         if (!g) return null;
         run.guns[src.hand] = null;
-        run.bag.push(g);
+        run.temp.push(g);
         uid = g.uid;
       } else return '金币无法出售';
-      const it = run.bag.find((b) => b.uid === uid)!;
+      const it = run.bag.find((b) => b.uid === uid) ?? run.temp.find((b) => b.uid === uid)!;
       const price = sellPrice(it);
       const e = sellItem(run, uid);
       if (!e) { this.cb.sound('buy'); this.cb.toast(`出售 ${it.kind === 'bullet' ? bulletName(it) : itemName(it)}，获得 ${price} 金币`, '#ffd24a'); }
       return e;
     }
+    // 第4.1次调整：在区域里不能拆装枪械和子弹
+    const loadoutTarget = kind === 'slot' || kind === 'hand';
+    if (!safe && (this.touchesLoadout(src) || loadoutTarget)) return LOCKED;
     if (kind === 'slot') {
       const gunUid = Number(tgt.getAttribute('data-gun')), slot = Number(tgt.getAttribute('data-slot'));
-      if (src.t === 'bag') {
-        const it = run.bag.find((b) => b.uid === src.uid);
+      if (src.t === 'bag' || src.t === 'temp') {
+        const it = this.findItem(w, src);
         if (!it || it.kind !== 'bullet') return it?.kind === 'gun' ? '枪械不能装进子弹槽' : '只有子弹可以装进枪里';
-        const e = bulletToSlot(run, { from: 'bag', uid: src.uid }, gunUid, slot);
+        const e = bulletToSlot(run, { from: src.t, uid: src.uid }, gunUid, slot);
         if (!e) this.cb.sound('pickup');
         return e;
       }
@@ -357,15 +409,22 @@ export class BagView {
       }
       return null;
     }
-    if (kind === 'bag') {
-      if (src.t === 'slot') { const e = slotToBag(run, src.gunUid, src.slot); if (!e) this.cb.sound('click'); return e; }
-      if (src.t === 'hand') { const e = unequipToBag(run, src.hand); if (!e) this.cb.sound('click'); return e; }
+    if (kind === 'bag' || kind === 'temp') {
+      const to = kind as Holder;
+      if (src.t === 'slot') { const e = slotTo(run, src.gunUid, src.slot, to); if (!e) this.cb.sound('click'); return e; }
+      if (src.t === 'hand') { const e = unequipTo(run, src.hand, to); if (!e) this.cb.sound('click'); return e; }
+      if ((src.t === 'bag' || src.t === 'temp') && src.t !== to) {
+        if (to === 'temp' && !safe) return null;
+        const e = moveItem(run, src.uid, src.t, to);
+        if (!e) this.cb.sound('click');
+        return e;
+      }
       return null;
     }
     if (kind === 'hand') {
       const hand = Number(tgt.getAttribute('data-hand'));
-      if (src.t === 'bag') {
-        const it = run.bag.find((b) => b.uid === src.uid);
+      if (src.t === 'bag' || src.t === 'temp') {
+        const it = this.findItem(w, src);
         if (!it) return null;
         if (it.kind === 'bullet') {
           // 拖到枪卡上：装进第一个空槽
@@ -373,12 +432,12 @@ export class BagView {
           if (!g) return '这只手没有枪';
           const s = g.bullets.findIndex((b) => !b);
           if (s < 0) return '这把枪的子弹槽已满（可以拖到具体槽位替换）';
-          bulletToSlot(run, { from: 'bag', uid: it.uid }, g.uid, s);
-          this.cb.sound('pickup');
-          return null;
+          const e = bulletToSlot(run, { from: src.t, uid: it.uid }, g.uid, s);
+          if (!e) this.cb.sound('pickup');
+          return e;
         }
         if (it.kind !== 'gun') return '只能装备枪械';
-        const e = equipFromBag(run, it.uid, hand);
+        const e = equipFrom(run, src.t, it.uid, hand);
         if (!e) this.cb.sound('pickup');
         return e;
       }
@@ -390,14 +449,16 @@ export class BagView {
 
   private dropOut(w: World, src: DragSrc): string | null {
     const run = w.run;
-    if (src.t === 'bag') { w.dropFromBag(src.uid); this.cb.sound('drop'); return null; }
+    if (src.t === 'bag' || src.t === 'temp') { w.dropFromBag(src.uid); this.cb.sound('drop'); return null; }
     if (src.t === 'gold') { w.dropGold(Math.min(src.amount, run.gold)); return null; }
+    // 装备中的枪械与枪里的子弹只能在安全屋里丢弃
+    if (!this.inSafe(w)) return LOCKED;
     if (src.t === 'slot') {
       const g = findGun(run, src.gunUid);
       const b = g?.bullets[src.slot];
       if (!g || !b) return null;
       g.bullets[src.slot] = null;
-      run.bag.push(b);
+      run.temp.push(b);
       w.dropFromBag(b.uid);
       return null;
     }
@@ -405,7 +466,7 @@ export class BagView {
       const g = run.guns[src.hand];
       if (!g) return null;
       run.guns[src.hand] = null;
-      run.bag.push(g);
+      run.temp.push(g);
       w.dropFromBag(g.uid);
       return null;
     }
@@ -416,39 +477,61 @@ export class BagView {
     const w = this.getWorld();
     if (!w) return;
     const run = w.run;
+    const safe = this.inSafe(w);
     const el = (e.target as HTMLElement).closest<HTMLElement>('[data-drag]');
     if (!el) return;
     const t = el.getAttribute('data-drag');
     let err: string | null = null;
-    if (t === 'bag') {
-      const it = run.bag.find((b) => b.uid === Number(el.getAttribute('data-uid')));
+    if (t === 'bag' || t === 'temp') {
+      const from = t as Holder;
+      const it = (from === 'bag' ? run.bag : run.temp).find((b) => b.uid === Number(el.getAttribute('data-uid')));
       if (!it) return;
       if (it.kind === 'bullet') {
-        let done = false;
-        for (const g of run.guns) {
-          if (!g) continue;
-          const s = g.bullets.findIndex((b) => !b);
-          if (s >= 0) { bulletToSlot(run, { from: 'bag', uid: it.uid }, g.uid, s); done = true; break; }
+        if (!safe) err = LOCKED;
+        else {
+          let done = false;
+          for (const g of run.guns) {
+            if (!g) continue;
+            const s = g.bullets.findIndex((b) => !b);
+            if (s >= 0 && !bulletToSlot(run, { from, uid: it.uid }, g.uid, s)) { done = true; break; }
+          }
+          err = done ? null : '没有空的子弹槽';
+          if (done) this.cb.sound('pickup');
         }
-        err = done ? null : '没有空的子弹槽';
-        if (done) this.cb.sound('pickup');
       } else if (it.kind === 'gun') {
-        const hand = run.guns[0] ? (run.guns[1] ? 0 : 1) : 0;
-        err = equipFromBag(run, it.uid, hand);
-        if (!err) this.cb.sound('pickup');
+        if (!safe) err = LOCKED;
+        else {
+          const hand = run.guns[0] ? (run.guns[1] ? 0 : 1) : 0;
+          err = equipFrom(run, from, it.uid, hand);
+          if (!err) this.cb.sound('pickup');
+        }
+      } else if (from === 'temp') {
+        err = moveItem(run, it.uid, 'temp', 'bag');
+        if (!err) this.cb.sound('click');
       } else if (ITEMS[it.id].usable) {
         err = w.useItem(it.uid);
       } else err = '该物品会在到达安全屋时自动兑换';
     } else if (t === 'slot') {
-      err = slotToBag(run, Number(el.getAttribute('data-gun')), Number(el.getAttribute('data-slot')));
-      if (!err) this.cb.sound('click');
+      if (!safe) err = LOCKED;
+      else {
+        const gunUid = Number(el.getAttribute('data-gun')), slot = Number(el.getAttribute('data-slot'));
+        // 背包放不下时卸到临时整备区
+        err = slotTo(run, gunUid, slot, 'bag');
+        if (err) err = slotTo(run, gunUid, slot, 'temp');
+        if (!err) this.cb.sound('click');
+      }
     } else if (t === 'hand') {
-      err = unequipToBag(run, Number(el.getAttribute('data-hand')));
-      if (!err) this.cb.sound('click');
+      if (!safe) err = LOCKED;
+      else {
+        const hand = Number(el.getAttribute('data-hand'));
+        err = unequipTo(run, hand, 'bag');
+        if (err) err = unequipTo(run, hand, 'temp');
+        if (!err) this.cb.sound('click');
+      }
     } else if (t === 'gold') {
       // 右键金币堆：丢在地上（腾出背包空间）
-      if (w.phase === 'safehouse') err = '安全屋里的金币会自动暂存';
-      else w.dropGold(Math.min(Number(el.getAttribute('data-amt')) || PLAYER.goldPerUnit, run.gold));
+      if (safe) err = '安全屋里的金币会自动暂存';
+      else w.dropGold(Math.min(Number(el.getAttribute('data-amt')) || run.goldUnit(), run.gold));
     }
     if (err) { this.cb.sound('denied'); this.cb.toast(err, '#ff5a4a'); }
     this.tip.hide();

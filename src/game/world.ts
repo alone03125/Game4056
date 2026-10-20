@@ -5,6 +5,7 @@
 
 import { ZONES, SAFEHOUSE, PLAYER, DIFFICULTY, SUIT_MAX, COOP, REVIVE_INVULN } from '../config';
 import { itemValue, ITEMS, JAR_VALUE, makeConsumable } from '../data/items';
+import { RELIC } from '../data/relics';
 import { pointInAABB } from '../util/math';
 import { Rng } from '../util/rng';
 import { CollisionWorld } from '../world/collision';
@@ -18,6 +19,8 @@ import type { NetHooks, RemotePlayer, Target } from './net';
 import { Pickups } from './pickups';
 import { Input, Player } from './player';
 import { Projectiles } from './projectiles';
+import { Quests } from './quest';
+import { RelicFx } from './relicfx';
 import { generateShop, ShopState } from './shop';
 import { RunState } from './state';
 
@@ -58,10 +61,12 @@ class Combo {
   add(): void {
     this.count++;
     this.t = 2.6;
+    this.w.run.combo = this.count;
     if (this.count > this.w.run.stats.bestCombo) this.w.run.stats.bestCombo = this.count;
   }
   update(dt: number): void {
     if (this.t > 0) { this.t -= dt; if (this.t <= 0) this.count = 0; }
+    this.w.run.combo = this.count;
   }
 }
 
@@ -80,6 +85,10 @@ export class World {
   enemies: Enemies;
   projs: Projectiles;
   pickups: Pickups;
+  /** 第4.1次调整：区域任务与奇物宝箱 */
+  quests: Quests;
+  /** 第4.1次调整：奇物增益的运行时效果 */
+  relicFx: RelicFx;
   boss: BossAI | null = null;
   bossEnemy: Enemy | null = null;
   phase: Phase = 'explore';
@@ -134,6 +143,8 @@ export class World {
     this.projs = new Projectiles(this);
     this.pickups = new Pickups(this);
     this.combo = new Combo(this);
+    this.quests = new Quests(this, run.seed);
+    this.relicFx = new RelicFx(this);
   }
 
   /** 单人 / 房主：负责丧尸 AI 与流程推进 */
@@ -145,6 +156,7 @@ export class World {
   start(spawnIndex = 0): void {
     const startSide = this.mapRng.chance(0.5) ? 'L' : 'R';
     const layout = generateZone(1, { x0: 0, y0: 0 }, startSide, null, this.mapRng.int(1, 1e9));
+    this.quests.setup(layout);
     this.setLayout(layout);
     // 多人时出生点稍微错开
     const off = [[0, 0], [1.4, 0], [-1.4, 0], [0, -1.4]][spawnIndex % 4];
@@ -186,6 +198,8 @@ export class World {
     this.bossCleared = false;
     const sub = L.index >= 6 ? '击败曼巴僵尸，终结一切' : L.isBoss ? '击败尸王，结束这场噩梦' : '向安全屋前进，注意辐射值';
     this.fx.banner(`${L.cfg.name}　${L.cfg.subtitle}`, sub, '#ffffff');
+    // 第4.1次调整：发布区域任务；房主生成异变体与奇物宝箱
+    this.quests.begin();
   }
 
   spawningActive(): boolean {
@@ -245,7 +259,8 @@ export class World {
     if (this.net) {
       for (const r of this.net.remotes()) {
         if (r.dead || r.downed || r.arrived) continue;
-        T.push({ id: r.id, x: r.x, y: r.y, vx: r.vx, vy: r.vy, r: 0.4, local: false });
+        // 天生神力：碰撞范围 +80%
+        T.push({ id: r.id, x: r.x, y: r.y, vx: r.vx, vy: r.vy, r: r.prof?.relics?.includes('might') ? PLAYER.radius * RELIC.mightScale : PLAYER.radius, local: false });
       }
     }
   }
@@ -313,10 +328,12 @@ export class World {
     }
 
     this.enemies.update(dt);
-    if (this.boss?.mirror) this.boss.tickTelegraphs(dt);
+    if (this.boss?.mirror) { this.boss.tickTelegraphs(dt); this.boss.mirrorHits(dt); }
     this.projs.update(dt);
     this.pickups.update(dt);
     this.combo.update(dt);
+    this.quests.update(dt);
+    this.relicFx.update(dt);
     for (const c of this.corpses) c.t += dt;
     if (this.corpses.length && this.corpses[0].t > 2.2) this.corpses = this.corpses.filter((c) => c.t <= 2.2);
 
@@ -366,7 +383,8 @@ export class World {
     const run = this.run;
     // 倒地时辐射值也会继续累积
     if (!(this.phase === 'explore' || this.phase === 'boss') || !this.player.alive) return;
-    run.rad += this.layout.cfg.radRate * dt;
+    // 第4.1次调整：超级防护服减少受到的辐射
+    run.rad += this.layout.cfg.radRate * dt * this.relicFx.radMul();
     const th = this.radThresh();
     let lvl = 0;
     if (run.rad >= th[2]) lvl = 3;
@@ -537,6 +555,8 @@ export class World {
     const nextIndex = L.index + 1;
     const { origin, startSide } = nextZoneOrigin(room, nextIndex);
     const next = generateZone(nextIndex, origin, startSide, room, this.mapRng.int(1, 1e9));
+    // 第4.1次调整：放置下一区的任务物件（可燃物堆要在构建碰撞与导航之前加入地图）
+    this.quests.setup(next);
     this.enemies.clearAll();
     this.zoneStarted = false;
     this.phase = 'safehouse';
@@ -551,7 +571,44 @@ export class World {
       if (banked > 0) this.fx.toast(`已暂存 ${banked} 金币${jars ? `（含 ${jars} 个金币罐）` : ''}`, '#ffd24a');
       if (vals > 0) this.fx.toast(`贵重品兑换：免费祭坛加点 ×${vals}`, '#e07aff');
     }
+    this.suitAverage();
     this.events.enterSafehouse();
+  }
+
+  /** 超级防护服（第4.1次调整）：有存活的队友时，每次进入安全屋把所有玩家的辐射平分（由房主计算） */
+  private suitAverage(): void {
+    const net = this.net;
+    if (!net || !net.isHost) return;
+    const list: { rad: number; suit: boolean }[] = [];
+    if (this.player.alive) list.push({ rad: this.run.rad, suit: this.run.has('suit') });
+    for (const r of net.remotes()) if (!r.dead) list.push({ rad: r.rad, suit: !!r.prof?.relics?.includes('suit') });
+    if (list.length < 2 || !list.some((x) => x.suit)) return;
+    const avg = Math.round((list.reduce((a, x) => a + x.rad, 0) / list.length) * 10) / 10;
+    net.radAvg(avg);
+    this.applyRadAvg(avg);
+  }
+
+  applyRadAvg(v: number): void {
+    if (!this.player.alive) return;
+    this.run.rad = v;
+    this.fx.toast(`超级防护服：所有人的辐射值平分为 ${v.toFixed(1)}K`, '#7affc0');
+  }
+
+  /** 第4.1次调整：关闭背包或商店界面时，临时整备区里的物品全部掉在地上 */
+  flushTemp(): void {
+    const run = this.run;
+    if (!run.temp.length) return;
+    const p = this.player;
+    const items = run.temp.splice(0);
+    items.forEach((it, i) => {
+      const a = p.face + Math.PI + (i - (items.length - 1) / 2) * 0.5;
+      const d = 1.3 + (i % 3) * 0.5;
+      let x = p.x + Math.cos(a) * d, y = p.y + Math.sin(a) * d;
+      if (this.col.overlapsCircle(x, y, 0.3)) { x = p.x; y = p.y; }
+      this.pickups.dropThing(it, x, y, false);
+    });
+    this.fx.sound('drop');
+    this.fx.toast(`临时整备区里的 ${items.length} 件物品掉在了地上`, '#ffb03a');
   }
 
   /** 第五区安全屋：在房间里放上 玩家数 × 5 支净化血清（所有玩家用同样的编号生成，由房主裁决归属） */
@@ -571,6 +628,7 @@ export class World {
 
   private leaveSafehouse(): void {
     const L = this.layout;
+    this.flushTemp();
     // 清掉试枪留下的子弹、地雷与毒雾
     this.projs.clear();
     this.setDoor(L.prevRoom!.exitDoor, true);
@@ -622,8 +680,9 @@ export class World {
       this.fx.sound('explosion', e.x, e.y, 1);
     }
     this.fx.shake(1.2);
+    // 奇物宝箱不会一起倒下
     for (const o of this.enemies.list) {
-      if (o.dead || o === e) continue;
+      if (o.dead || o === e || o.type === 'chest') continue;
       o.dead = true;
       this.fx.blood(o.x, o.y, 0x6a1a14, 6);
     }
@@ -636,13 +695,16 @@ export class World {
     this.events.coreOpened?.();
   }
 
-  /** 玩家受伤；返回是否实际造成了伤害 */
-  damagePlayer(amount: number, sx: number, sy: number): boolean {
+  /** 玩家受伤；返回是否实际造成了伤害。src：造成伤害的敌人编号（联机时通知房主，第4.1次调整） */
+  damagePlayer(amount: number, sx: number, sy: number, src = -1): boolean {
     const run = this.run;
     const p = this.player;
     if (!this.localTargetable()) return false;
     if (run.invulnT > 0 || p.iframe > 0) return false;
     if ((this as any).__god) return false;
+    // 第4.1次调整：圣盾
+    if (this.relicFx.blocks()) { p.iframe = PLAYER.contactIFrame; this.net?.hurt(src, 0); return false; }
+    this.net?.hurt(src, amount);
     run.hp -= amount;
     run.stats.damageTaken += amount;
     p.iframe = PLAYER.contactIFrame;
@@ -663,6 +725,7 @@ export class World {
     const amount = dmg * COOP.friendlyFire;
     if (amount < 0.05) return;
     p.ffIframe = 0.5;
+    if (this.relicFx.blocks()) return;
     run.hp -= amount;
     run.stats.damageTaken += amount;
     p.hurtT = 0.2;
@@ -846,9 +909,14 @@ export class World {
     return null;
   }
 
-  /** 把背包物品丢到地上（之后需要按 F 拾取） */
+  /** 把背包（或临时整备区）里的物品丢到地上（之后需要按 F 拾取） */
   dropFromBag(uid: number): void {
-    const it = this.run.removeFromBag(uid);
+    const run = this.run;
+    let it = run.removeFromBag(uid);
+    if (!it) {
+      const i = run.temp.findIndex((x) => x.uid === uid);
+      if (i >= 0) it = run.temp.splice(i, 1)[0];
+    }
     if (!it) return;
     const p = this.player;
     const a = p.face + Math.PI + (Math.random() - 0.5);

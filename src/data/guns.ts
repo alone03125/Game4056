@@ -6,7 +6,7 @@
 
 import { GUN_LIMITS } from '../config';
 import { Rng } from '../util/rng';
-import { Bullet, BULLETS, bulletCount, nextUid } from './bullets';
+import { Bullet, BULLETS, bulletCount, CastMods, IRI, nextUid, SHINY, smeltBullets } from './bullets';
 
 export const GUN_BUDGET_K = 1.75;
 export const GUN_ROLL: [number, number] = [0.7, 1.4];
@@ -211,35 +211,72 @@ export interface GunStats {
   delay: number;
   reload: number;
   spread: number; // 枪械散射 + 子弹数值补正（未截断，可为负）
-  cap: number;
+  cap: number; // 实际载弹量（第4.1次调整：拆卸模块让载弹量减半）
   loaded: number;
   recoilMul: number; // 修饰语：后坐力倍率
   knock: boolean; // 修饰语“强劲”
   reverse: boolean; // 修饰语“凶险”
+  shorts: number; // 短行程模块数量（换弹时各自判定一次）
+}
+
+/** 复制模块（第4.1次调整）：视为排在它前面最近的一发子弹（跳过空槽和其他模块）；前面没有子弹时什么也不做 */
+export function copySource(bullets: readonly (Bullet | null)[], i: number): Bullet | null {
+  for (let j = i - 1; j >= 0; j--) {
+    const b = bullets[j];
+    if (b && !BULLETS[b.def].logic) return b;
+  }
+  return null;
+}
+
+/** 复制模块解析后的实际子弹（不是复制模块时原样返回） */
+export function resolveSlot(bullets: readonly (Bullet | null)[], i: number): Bullet | null {
+  const b = bullets[i];
+  if (!b || !BULLETS[b.def].logic?.copy) return b;
+  return copySource(bullets, i);
+}
+
+/** 拆卸模块：每装一个，载弹量减半（最少 1） */
+export function effectiveCap(cap: number, bullets: readonly (Bullet | null)[]): number {
+  let c = cap;
+  for (const b of bullets) if (b && BULLETS[b.def].mods.half) c = Math.floor(c / 2);
+  return Math.max(1, c);
+}
+
+export function loadedCount(bullets: readonly (Bullet | null)[]): number {
+  let n = 0;
+  for (const b of bullets) if (b) n++;
+  return n;
 }
 
 export function gunStats(g: Gun, tempAtk = 0): GunStats {
   const md = g.mod ? GUN_MODS[g.mod] : null;
-  let delay = g.delay + (md?.delay ?? 0), reload = g.reload + (md?.reload ?? 0), spread = g.spread, loaded = 0, atkAdd = 0;
-  for (const b of g.bullets) {
-    if (!b) continue;
+  let delay = g.delay + (md?.delay ?? 0), reload = g.reload + (md?.reload ?? 0), spread = g.spread, loaded = 0, atkAdd = 0, reloadMul = 1, shorts = 0;
+  for (let i = 0; i < g.bullets.length; i++) {
+    const raw = g.bullets[i];
+    if (!raw) continue;
     loaded++;
+    if (BULLETS[raw.def].logic?.short) shorts++;
+    // 复制模块：前面那发子弹对枪械数值的影响再生效一次
+    const b = resolveSlot(g.bullets, i);
+    if (!b) continue;
     const m = BULLETS[b.def].mods;
     delay += m.delay ?? 0;
     reload += m.reload ?? 0;
     spread += m.spread ?? 0;
     atkAdd += m.atk ?? 0;
+    if (m.reloadMul) reloadMul *= m.reloadMul;
   }
   return {
     atk: (g.atk + tempAtk + atkAdd) * (md?.dmg ?? 1),
     delay: Math.max(GUN_LIMITS.delay, delay),
-    reload: Math.max(GUN_LIMITS.reload, reload),
+    reload: Math.max(GUN_LIMITS.reload, reload * reloadMul),
     spread: Math.max(-360, Math.min(360, spread)), // 可为负：发射时与子弹散射相加后再截断到 0~360
-    cap: g.cap,
+    cap: effectiveCap(g.cap, g.bullets),
     loaded,
     recoilMul: md?.recoil ?? 1,
     knock: !!md?.knock,
     reverse: !!md?.reverse,
+    shorts,
   };
 }
 
@@ -248,42 +285,110 @@ export function gunSpeedMod(g: Gun | null): number {
   return g?.mod ? GUN_MODS[g.mod].speed ?? 0 : 0;
 }
 
+// —— 施放顺序（第4.1次调整：射击与 DPS 估算共用） ——
+
+/** 一轮弹匣中的施放状态：光标、循环模块登记的子弹 */
+export interface CastState {
+  cursor: number;
+  loops: Bullet[];
+  pendLoop: number;
+}
+
+export interface CastShot {
+  b: Bullet;
+  mods: CastMods;
+  /** 循环模块：随这一发一同射出的子弹 */
+  extra: Bullet[];
+}
+
+/**
+ * 从 st.cursor 开始取出一次“施放”要射出的子弹：
+ * 逻辑模块累积到下一发上；多重施放让接下来几发同时射出；复制模块视为前一发子弹；
+ * 熔炼模块把再下一发子弹的数值叠加上来；循环模块登记下一发，之后每射出一发都带上它。
+ * resolve：发射时的变化（例如盲盒变成随机子弹），DPS 估算时不传。
+ */
+export function castOnce(g: Gun, st: CastState, resolve?: (b: Bullet) => Bullet): CastShot[] {
+  const L = g.bullets.length;
+  const out: CastShot[] = [];
+  let toCast = 1, mods: CastMods = {}, smelt = 0, guard = 0;
+  const next = (): number => { while (st.cursor < L && !g.bullets[st.cursor]) st.cursor++; return st.cursor; };
+  while (toCast > 0 && guard++ < 48) {
+    if (next() >= L) break;
+    const idx = st.cursor++;
+    let b = resolveSlot(g.bullets, idx);
+    if (!b) continue; // 前面没有子弹的复制模块：相当于空槽
+    const lg = BULLETS[b.def].logic;
+    if (lg) {
+      if (lg.cast) toCast += lg.cast - 1;
+      if (lg.homing) mods.homing = true;
+      if (lg.pierce) mods.pierce = (mods.pierce ?? 0) + lg.pierce;
+      if (lg.blast) mods.blast = true;
+      if (lg.dmg) mods.dmg = (mods.dmg ?? 1) * lg.dmg;
+      if (lg.speed) mods.speed = (mods.speed ?? 1) * lg.speed;
+      if (lg.focus) mods.focus = (mods.focus ?? 0) + lg.focus;
+      if (lg.shine) mods.shine = true;
+      if (lg.multi) mods.multi = (mods.multi ?? 1) * lg.multi;
+      if (lg.loop) st.pendLoop++;
+      if (lg.smelt) smelt++;
+      continue;
+    }
+    if (resolve) b = resolve(b);
+    // 熔炼：紧跟着的下一发（跳过空槽）是子弹时叠加上来，并且不再单独射出
+    while (smelt > 0) {
+      const j = next();
+      if (j >= L) break;
+      const b2raw = resolveSlot(g.bullets, j);
+      if (!b2raw || BULLETS[b2raw.def].logic) break;
+      st.cursor = j + 1;
+      b = smeltBullets(b, resolve ? resolve(b2raw) : b2raw);
+      smelt--;
+    }
+    smelt = 0;
+    out.push({ b, mods, extra: st.loops.slice() });
+    while (st.pendLoop > 0) { st.loops.push(b); st.pendLoop--; }
+    mods = {};
+    toCast--;
+  }
+  return out;
+}
+
+/** 单发（一枚子弹）的单体伤害估算（不含枪械攻击倍率） */
+function shotDamage(b: Bullet, mods: CastMods): number {
+  const d = BULLETS[b.def];
+  let m = bulletCount(b) * (mods.multi ?? 1);
+  // 盲盒：按所有子弹的平均水平估算
+  let atk = d.flags?.mystery ? 55 : d.flags?.butter ? b.atk * (1 + d.flags.butter * 6) : b.atk;
+  if (mods.shine) atk *= (b.shiny ? 1 : SHINY.mul) * (b.iri ? 1 : IRI.mul);
+  if (d.kind === 'toxic') m = 12;
+  if (d.kind === 'singular') m = 25;
+  if (d.kind === 'saw') m = 6;
+  if (d.flags?.burn) m *= 2.2;
+  let mul = mods.dmg ?? 1;
+  if (mods.blast) mul *= 1.6;
+  if (mods.pierce) mul *= 1.3;
+  return atk * m * mul;
+}
+
 /** 理论每秒伤害（单体估算）：按真实的施放顺序走一遍弹匣（含逻辑模块） */
 export function gunDps(g: Gun, tempAtk = 0): number {
   const s = gunStats(g, tempAtk);
   if (s.loaded === 0) return 0;
-  let dmg = 0, steps = 0, i = 0;
+  const st: CastState = { cursor: 0, loops: [], pendLoop: 0 };
+  let dmg = 0, steps = 0, guard = 0;
   const L = g.bullets.length;
-  let guard = 0;
-  while (i < L && guard++ < 64) {
-    let toCast = 1, mul = 1, fired = 0;
-    while (toCast > 0 && i < L) {
-      const b = g.bullets[i++];
-      if (!b) continue;
-      const d = BULLETS[b.def];
-      if (d.logic) {
-        if (d.logic.cast) toCast += d.logic.cast - 1;
-        if (d.logic.dmg) mul *= d.logic.dmg;
-        if (d.logic.blast) mul *= 1.6;
-        if (d.logic.pierce) mul *= 1.3;
-        continue;
-      }
-      let m = bulletCount(b);
-      // 盲盒：按所有子弹的平均水平估算
-      const atk = d.flags?.mystery ? 55 : d.flags?.butter ? b.atk * (1 + d.flags.butter * 6) : b.atk;
-      if (d.kind === 'toxic') m = 12;
-      if (d.kind === 'singular') m = 25;
-      if (d.kind === 'saw') m = 6;
-      if (d.flags?.burn) m *= 2.2;
-      dmg += atk * s.atk * m * mul;
-      mul = 1;
-      toCast--;
-      fired++;
+  while (st.cursor < L && guard++ < 64) {
+    const shots = castOnce(g, st);
+    if (!shots.length) break;
+    for (const sh of shots) {
+      dmg += shotDamage(sh.b, sh.mods) * s.atk;
+      for (const x of sh.extra) dmg += shotDamage(x, {}) * s.atk;
     }
-    while (i < L && !g.bullets[i]) i++;
-    if (i < L && fired > 0) steps++;
+    while (st.cursor < L && !g.bullets[st.cursor]) st.cursor++;
+    if (st.cursor < L) steps++;
   }
-  const cycle = steps * s.delay + s.reload;
+  // 短行程模块：每个的期望换弹倍率 0.9 × 0.5 + 0.1 × 4 = 0.85
+  const reload = Math.max(GUN_LIMITS.reload, s.reload * Math.pow(0.85, s.shorts));
+  const cycle = steps * s.delay + reload;
   return dmg / Math.max(0.05, cycle);
 }
 

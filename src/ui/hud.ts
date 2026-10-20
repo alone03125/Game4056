@@ -1,16 +1,20 @@
 // 游戏内 HUD：生命/状态、区域与辐射、小地图、双枪面板、背包指示、快捷栏、提示、Boss 血条等。
+// 第4.1次调整：辐射计量条移到左上角与生命条放在一起，区域名称、计时、丧尸强化与区域任务放到右上角小地图下方，
+// 屏幕上方中间空出来；奇物增益以小图标显示在左上角；Boss 血条移到屏幕下方。
 
 import { ELITE_CSS, enhanceCoef, RARITY_CSS, RECOIL, ZONES } from '../config';
 import { BULLETS, bulletName, recoilOf } from '../data/bullets';
 import { DEFAULT_KEYS, KeyAction, keyLabel } from '../core/settings';
 import { SLOT_CSS } from '../render/entities';
 import { SUIT_NAMES } from '../game/world';
-import { Gun, gunStats } from '../data/guns';
+import { Gun, GunStats, gunStats } from '../data/guns';
 import { ITEMS, QUICK_ORDER } from '../data/items';
+import { RelicId, RELICS } from '../data/relics';
+import { QUEST } from '../game/quest';
 import type { World } from '../game/world';
 import { fmtNum, fmtTime } from '../util/math';
 import { clear, h } from './dom';
-import { bulletIcon, itemIcon } from './icons';
+import { bulletIcon, itemIcon, relicIcon } from './icons';
 import { PIXEL_FONT } from './font';
 
 interface HandView { auto: boolean; cursor: number; reloading: boolean; prog: number }
@@ -37,6 +41,9 @@ interface HudSrc {
   guns: [Gun | null, Gun | null];
   hands: HandView[];
   counts: number[];
+  relics: RelicId[];
+  /** 枪械的实际数值（自己：含全局加成与奇物；观战的队友：只含过热） */
+  stats(g: Gun, hand: number): GunStats;
 }
 
 function escHtml(s: string): string {
@@ -74,6 +81,10 @@ export class Hud {
   private bossFill!: HTMLDivElement;
   private bossName!: HTMLDivElement;
   private hints!: HTMLDivElement;
+  private relicRow!: HTMLDivElement;
+  private relicSig = '';
+  private quest!: HTMLDivElement;
+  private questSig = '';
   fps!: HTMLDivElement;
   private vignette!: HTMLDivElement;
   hurt!: HTMLDivElement;
@@ -105,13 +116,9 @@ export class Hud {
     this.hpText = h('div', { class: 'hp-text' });
     this.statRow = h('div', { class: 'stat-row' });
     this.buffs = h('div', { class: 'buffs' });
+    this.relicRow = h('div', { class: 'relic-row hidden' });
     this.team = h('div', { class: 'team hidden' });
-    this.root.append(h('div', { class: 'hud-tl' }, h('div', { class: 'panel' },
-      h('div', { class: 'hp-row' }, h('span', { style: 'font-weight:800;color:#ff6a5a;font-size:12px' }, 'HP'), h('div', { class: 'hp-bar' }, this.hpLag, this.hpFill, this.hpText)),
-      this.statRow, this.buffs), this.team));
-    // 中上
-    this.zoneName = h('div', { class: 'zone-name' });
-    this.zoneSub = h('div', { class: 'zone-sub' });
+    // 辐射（第4.1次调整：放在生命条下方）
     this.radHead = h('div', { class: 'rad-head' });
     this.radFill = h('div', { class: 'rad-fill' });
     const radBar = h('div', { class: 'rad-bar' }, this.radFill);
@@ -126,11 +133,19 @@ export class Hud {
       radBar.appendChild(l);
     }
     this.rad = h('div', { class: 'rad' }, this.radHead, radBar);
-    this.root.append(h('div', { class: 'hud-tc panel' }, this.zoneName, this.zoneSub, this.rad));
-    // 右上
+    this.root.append(h('div', { class: 'hud-tl' }, h('div', { class: 'panel' },
+      h('div', { class: 'hp-row' }, h('span', { style: 'font-weight:800;color:#ff6a5a;font-size:12px' }, 'HP'), h('div', { class: 'hp-bar' }, this.hpLag, this.hpFill, this.hpText)),
+      this.rad, this.statRow, this.buffs, this.relicRow), this.team));
+    // 右上：小地图，下方是区域信息与区域任务，再下方是提示消息
     this.mini = h('canvas', { class: 'minimap', width: 200, height: 250 });
     this.trStats = h('div', { class: 'tr-stats' });
-    this.root.append(h('div', { class: 'hud-tr panel' }, this.mini, this.trStats));
+    this.zoneName = h('div', { class: 'zone-name' });
+    this.zoneSub = h('div', { class: 'zone-sub' });
+    this.quest = h('div', { class: 'quest hidden' });
+    this.toasts = h('div', { class: 'toasts' });
+    this.root.append(h('div', { class: 'hud-tr' },
+      h('div', { class: 'panel tr-panel' }, this.mini, this.trStats, h('div', { class: 'zone-box' }, this.zoneName, this.zoneSub), this.quest),
+      this.toasts));
     // 左下：枪
     const bl = h('div', { class: 'hud-bl' });
     for (let i = 0; i < 2; i++) {
@@ -146,7 +161,6 @@ export class Hud {
     this.bagHint = h('div', { class: 'hint' }, 'TAB 背包');
     this.bagInd.append(this.bagCap, this.bagHint);
     this.root.append(h('div', { class: 'hud-br' }, this.quick, this.bagInd));
-    this.toasts = h('div', { class: 'toasts' });
     this.banner = h('div', { class: 'banner' });
     this.bossName = h('div', { class: 'bn' });
     this.bossFill = h('div', { class: 'bf' });
@@ -154,7 +168,7 @@ export class Hud {
     this.bossBar = h('div', { class: 'boss-bar hidden' }, this.bossName, h('div', { class: 'bb' }, this.bossFill), this.bossPips);
     this.hints = h('div', { class: 'hints panel' });
     this.fps = h('div', { class: 'fps hidden' });
-    this.root.append(this.toasts, this.banner, this.bossBar, this.hints, this.fps);
+    this.root.append(this.banner, this.bossBar, this.hints, this.fps);
   }
 
   show(v: boolean): void {
@@ -228,7 +242,9 @@ export class Hud {
     if (oh > 0) bf.push(`<span class="buff" style="color:#ff6a3a">过热 +3.00x ${oh.toFixed(1)}s</span>`);
     if (ee > 0) bf.push(`<span class="buff" style="color:#5a9aff">鳗 +160% ${ee.toFixed(1)}s</span>`);
     if (src.watching === null && w.combo.count >= 5) bf.push(`<span class="buff" style="color:#ffd24a">连杀 ×${w.combo.count}</span>`);
+    if (src.watching === null && w.relicFx.shieldCd > 0) bf.push(`<span class="buff" style="color:#fff2a0">圣盾冷却 ${w.relicFx.shieldCd.toFixed(1)}s</span>`);
     this.buffs.innerHTML = bf.join('');
+    this.updateRelics(src.relics);
     // 区域
     const cfg = w.layout.cfg;
     if (w.phase === 'safehouse') {
@@ -236,8 +252,9 @@ export class Hud {
       this.zoneSub.textContent = `整备中，下一站：${cfg.name} ${cfg.subtitle}`;
     } else {
       this.zoneName.textContent = `${cfg.name}　${cfg.subtitle}`;
-      this.zoneSub.innerHTML = `探索计时 <b class="num">${fmtTime(w.zoneTime)}</b>　丧尸强化 <b class="num">×${enhanceCoef(src.rad).toFixed(2)}</b>　难度 ${w.diffName()}`;
+      this.zoneSub.innerHTML = `<div>探索计时 <b class="num">${fmtTime(w.zoneTime)}</b>　难度 ${w.diffName()}</div><div>丧尸强化 <b class="num">×${enhanceCoef(src.rad).toFixed(2)}</b></div>`;
     }
+    this.updateQuest(w);
     const th = src.thresh;
     const maxV = th[2] * 1.12;
     this.radFill.style.width = Math.min(100, (src.rad / maxV) * 100) + '%';
@@ -305,6 +322,52 @@ export class Hud {
     this.vignette.style.boxShadow = `inset 0 0 ${160 + lowHp * 80}px ${lowHp > 0 ? `rgba(200,0,0,${0.35 + lowHp * 0.4})` : `rgba(${radC},${radA})`}`;
   }
 
+  /** 奇物增益：小图标（悬停显示说明） */
+  private updateRelics(list: RelicId[]): void {
+    const sig = list.join(',');
+    if (sig === this.relicSig) return;
+    this.relicSig = sig;
+    clear(this.relicRow);
+    this.relicRow.classList.toggle('hidden', !list.length);
+    for (const id of list) {
+      const d = RELICS[id];
+      this.relicRow.appendChild(h('img', { src: relicIcon(id), title: `${d.name}：${d.desc}`, draggable: 'false' }));
+    }
+  }
+
+  /** 区域任务（小地图下方） */
+  private updateQuest(w: World): void {
+    const q = w.quests;
+    const info = w.phase === 'safehouse' ? null : q.hud();
+    const chest = w.phase !== 'safehouse' && q.chestZone;
+    const ch = chest ? q.chest() : null;
+    const chestLine = !chest ? '' : ch ? `奇物宝箱 ${fmtNum(Math.max(0, ch.hp))} / ${fmtNum(ch.maxHp)}` : '奇物宝箱已被打破';
+    const wait = info && !info.done ? this.arrowWait(w) : '';
+    const sig = info ? `${info.name}|${info.text}|${info.frac.toFixed(3)}|${info.done}|${chestLine}|${wait}` : `-${chestLine}`;
+    if (sig === this.questSig) return;
+    this.questSig = sig;
+    this.quest.classList.toggle('hidden', !info && !chest);
+    clear(this.quest);
+    if (info) {
+      this.quest.append(
+        h('div', { class: 'qh' }, h('span', { style: `color:${info.color}` }, `区域任务：${info.name}`), info.done ? h('span', { class: 'qd' }, '✓') : null),
+        h('div', { class: 'qt' }, info.text),
+        h('div', { class: 'qb' }, h('i', { style: `width:${(info.frac * 100).toFixed(1)}%;background:${info.done ? '#6aff8a' : info.color}` })));
+      if (wait) this.quest.append(h('div', { class: 'qw' }, wait));
+    }
+    if (chestLine) this.quest.append(h('div', { class: 'qc' }, chestLine));
+  }
+
+  /** 方向箭头还要多久出现 */
+  private arrowWait(w: World): string {
+    const q = w.quests;
+    const at = q.id === 'signal' ? QUEST.arrow.signal : q.id === 'mutant' ? QUEST.arrow.mutant : q.id === 'cargo' ? QUEST.arrow.cargo : 0;
+    if (!at) return '';
+    const found = q.id === 'signal' ? q.found.signal : q.id === 'mutant' ? q.found.mutant : q.found.cargo;
+    const left = Math.ceil(at - w.zoneTime);
+    return found || left <= 0 ? '' : `${left} 秒后显示方向`;
+  }
+
   /** 自己，或者阵亡后被观战的队友 */
   private source(w: World): HudSrc {
     const run = w.run, p = w.player;
@@ -316,7 +379,8 @@ export class Hud {
         watching: r.name, alive: !r.dead, downed: r.downed, hp: r.hp, maxHp: r.maxHp, suit: r.suit, speed: r.speed, recoilResist: pf?.recoilResist ?? 0,
         kills: r.kills, buffs: r.buffs, rad: r.rad, radLevel: r.rad >= th[2] ? 3 : r.rad >= th[1] ? 2 : r.rad >= th[0] ? 1 : 0, thresh: th,
         gold: pf?.gold ?? 0, bank: pf?.bank ?? 0, bagUsed: pf?.bagUsed ?? 0, bagCap: pf?.bagCap ?? 16,
-        guns: pf ? pf.guns : [null, null], hands: r.hands, counts: pf?.counts ?? [],
+        guns: pf ? pf.guns : [null, null], hands: r.hands, counts: pf?.counts ?? [], relics: pf?.relics ?? [],
+        stats: (g) => gunStats(g, r.buffs[1] > 0 ? 3 : 0),
       };
     }
     return {
@@ -324,7 +388,8 @@ export class Hud {
       recoilResist: run.recoilResist, kills: run.stats.kills, buffs: [run.invulnT, run.overheatT, run.eelT], rad: run.rad, radLevel: w.radLevel,
       thresh: w.radThresh(), gold: run.gold, bank: run.bank, bagUsed: run.bagUsed(), bagCap: run.bagCap, guns: run.guns,
       hands: p.hands.map((hs) => ({ auto: hs.auto, cursor: hs.cursor, reloading: hs.reloading, prog: hs.reloading ? 1 - Math.max(0, hs.cooldown) / Math.max(0.01, hs.reloadTotal) : 1 })),
-      counts: QUICK_ORDER.map((id) => run.countItem(id)),
+      counts: QUICK_ORDER.map((id) => run.countItem(id)), relics: run.relics,
+      stats: (g, hand) => run.handStats(g, hand),
     };
   }
 
@@ -332,8 +397,8 @@ export class Hud {
     const g = src.guns[i];
     const c = this.gunCards[i];
     const hs = src.hands[i] ?? { auto: false, cursor: 0, reloading: false, prog: 1 };
-    const heat = src.buffs[1] > 0;
-    const sig = (src.watching ?? '@') + (g ? `${g.uid}|${g.bullets.map((b) => (b ? b.uid : 0)).join(',')}|${g.cap}|${g.atk}|${g.reload}|${hs.auto}|${heat}` : 'none' + hs.auto) + this.keys.autoL + this.keys.autoR;
+    const st0 = g ? src.stats(g, i) : null;
+    const sig = (src.watching ?? '@') + (g && st0 ? `${g.uid}|${g.bullets.map((b) => (b ? b.uid : 0)).join(',')}|${g.cap}|${st0.atk.toFixed(2)}|${st0.delay.toFixed(2)}|${st0.reload.toFixed(2)}|${hs.auto}` : 'none' + hs.auto) + this.keys.autoL + this.keys.autoR;
     if (sig !== this.gunSig[i]) {
       this.gunSig[i] = sig;
       clear(c);
@@ -344,7 +409,7 @@ export class Hud {
           h('div', { class: 'gun-stats' }, '拾取枪械后自动装备到空手位'));
         return;
       }
-      const st = gunStats(g, heat ? 3 : 0);
+      const st = st0!;
       c.style.borderLeftColor = RARITY_CSS[g.rarity];
       c.append(
         h('div', { class: 'gun-head' },
@@ -356,7 +421,9 @@ export class Hud {
       );
       const slots = h('div', { class: 'gun-slots' });
       g.bullets.forEach((b, k) => {
-        const s = h('div', { class: 'slot-mini' + (b?.shiny ? ' shiny' : '') + (b?.iri ? ' iri' : ''), 'data-k': k });
+        // 拆卸模块让载弹量减半：超出实际载弹量的空槽显示为不可用
+        const off = !b && k >= st.cap && st.loaded >= st.cap;
+        const s = h('div', { class: 'slot-mini' + (b?.shiny ? ' shiny' : '') + (b?.iri ? ' iri' : '') + (off ? ' off' : ''), 'data-k': k });
         if (b) s.appendChild(h('img', { src: bulletIcon(b.def), draggable: 'false' }));
         slots.appendChild(s);
       });
@@ -381,7 +448,7 @@ export class Hud {
       while (k < g.bullets.length && (!g.bullets[k] || BULLETS[g.bullets[k]!.def].logic)) k++;
       const b = g.bullets[k] ?? g.bullets.find((x) => x && !BULLETS[x.def].logic);
       if (b) {
-        const st = gunStats(g);
+        const st = src.stats(g, i);
         const info = recoilOf(b.rc * st.recoilMul, st.delay, src.recoilResist, RECOIL.t1, RECOIL.t2);
         // 盲盒发射时才知道会变成什么，后坐力也是随机的
         rl.textContent = `下一发：${bulletName(b)} ${BULLETS[b.def].flags?.mystery ? '【随机】' : info.label}`;
@@ -488,15 +555,37 @@ export class Hud {
     for (const it of w.pickups.items) {
       if (it.dead || !it.seen) continue;
       const th = it.thing;
-      g.fillStyle = th.kind === 'gun' ? RARITY_CSS[th.rarity] : th.kind === 'bullet' ? '#ffd27a' : th.kind === 'item' ? ITEMS[th.id].color : '#fff';
+      g.fillStyle = th.kind === 'gun' ? RARITY_CSS[th.rarity] : th.kind === 'bullet' ? '#ffd27a' : th.kind === 'item' ? ITEMS[th.id].color : th.kind === 'relic' ? `hsl(${(time * 120) % 360},100%,65%)` : '#fff';
       g.beginPath();
       g.arc(tx(it.x), ty(it.y), 2.6, 0, 7);
       g.fill();
+    }
+    // 第4.1次调整：区域任务的目标（可燃物堆、物资球、显示方向箭头的目标）
+    const q = w.quests;
+    for (const py of q.pyres) {
+      if (!py.seen) continue;
+      g.fillStyle = py.lit ? (Math.sin(time * 10) > 0 ? '#ffb03a' : '#ff6a1a') : '#ff2a1a';
+      g.strokeStyle = '#000';
+      g.lineWidth = 1.5;
+      g.beginPath(); g.moveTo(tx(py.x), ty(py.y) - 5); g.lineTo(tx(py.x) + 4, ty(py.y) + 3); g.lineTo(tx(py.x) - 4, ty(py.y) + 3); g.closePath(); g.stroke(); g.fill();
+    }
+    for (const b of q.balls) {
+      if (b.done || Math.hypot(b.x - w.view.x, b.y - w.view.y) > 26) continue;
+      g.fillStyle = '#ffd24a';
+      g.beginPath(); g.arc(tx(b.x), ty(b.y), 3, 0, 7); g.fill();
+    }
+    for (const a of q.arrows()) {
+      g.strokeStyle = a.color;
+      g.lineWidth = 2;
+      g.beginPath(); g.arc(tx(a.x), ty(a.y), 5 + Math.sin(time * 5) * 1.5, 0, 7); g.stroke();
+      g.fillStyle = a.color;
+      g.beginPath(); g.arc(tx(a.x), ty(a.y), 2, 0, 7); g.fill();
     }
     // 精英与 Boss
     const p = w.player;
     for (const e of w.enemies.list) {
       if (e.dead) continue;
+      if (e.type === 'chest') continue;
       if (e.type === 'boss') {
         g.fillStyle = '#ff2a1a';
         g.beginPath(); g.arc(tx(e.x), ty(e.y), 5, 0, 7); g.fill();

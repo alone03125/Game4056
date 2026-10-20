@@ -20,6 +20,7 @@ import { BagView } from './ui/bag';
 import { h } from './ui/dom';
 import { Hud } from './ui/hud';
 import { Menus, MpActions, parseSeed, TeamLine } from './ui/menus';
+import { RelicView } from './ui/relic';
 import { SafehouseView } from './ui/safehouse';
 import { Tooltip } from './ui/tooltip';
 import { RARITY_CSS } from './config';
@@ -42,6 +43,7 @@ export class App {
   tip: Tooltip;
   bag: BagView;
   safe: SafehouseView;
+  relicUi: RelicView;
   fadeEl: HTMLDivElement;
   state: AppState = 'menu';
   world: World | null = null;
@@ -92,6 +94,8 @@ export class App {
     this.safe = new SafehouseView(() => this.world, this.tip, cb);
     this.safe.onClose = () => { this.safe.setOpen(false); this.audio.play('click'); };
     this.uiEl.appendChild(this.safe.root);
+    // 第4.1次调整：奇物三选一
+    this.relicUi = new RelicView(this.uiEl, (id) => { this.world?.relicFx.choose(id); this.audio.play('click'); });
     this.menus = new Menus(this.uiEl, this.settings, () => this.records, {
       start: (d, s) => this.startGame(d, s),
       multiplayer: () => { void this.openMultiplayer(); },
@@ -207,6 +211,7 @@ export class App {
       },
       damageNumber: (x, y, amt, color, big) => { if (this.settings.damageNumbers) this.overlay.damage(x, y, amt, color, !!big); },
       floatText: (x, y, text, color) => this.overlay.text(x, y, text, color),
+      goldText: (x, y, amount) => this.overlay.goldText(x, y, amount),
       decal: (x, y, c, s) => r().entities.addDecal(x, y, c, s),
       shake: (amt) => r().shake(amt),
       playerHurt: (amt) => {
@@ -440,7 +445,7 @@ export class App {
     const w = this.world;
     if (!w) return false;
     if (this.coop) return this.coop.anyPaused() && w.phaseActive();
-    return this.state === 'paused' || (this.bag.open && w.phaseActive());
+    return this.state === 'paused' || ((this.bag.open || this.relicUi.open) && w.phaseActive());
   }
 
   private handleKeys(): void {
@@ -462,6 +467,12 @@ export class App {
       }
       if (this.state !== 'playing' || !w) continue;
       if (k === 'Space' && !w.player.alive && this.coop) { w.nextSpectate(); continue; }
+      // 奇物三选一：数字键 1~3
+      if (this.relicUi.open) {
+        const m = /^(?:Digit|Numpad)([1-3])$/.exec(k);
+        if (m) this.relicUi.pickIndex(w, Number(m[1]) - 1);
+        continue;
+      }
       const action = KEY_ACTIONS.find((a) => K[a] === k) as KeyAction | undefined;
       if (!action) continue;
       if (action === 'bag') { this.toggleBag(); continue; }
@@ -565,13 +576,14 @@ export class App {
     const playing = this.state === 'playing';
     const coop = this.coop;
     // 暂停：单人时 ESC / 背包；联机时把本地的暂停状态广播给所有人
-    if (coop) coop.setLocalPaused((this.state === 'paused' || this.bag.open) && w.phaseActive() && p.alive);
+    this.relicUi.update(w, this.state === 'playing' || this.state === 'paused');
+    if (coop) coop.setLocalPaused((this.state === 'paused' || this.bag.open || this.relicUi.open) && w.phaseActive() && p.alive);
     const paused = this.simPaused();
     const running = coop ? !paused : playing && !paused;
     // 输入 → 世界
     if (render) this.renderer.screenToGround(this.input.mouseX, this.input.mouseY, this.aim);
     if (running) {
-      const uiBlock = this.safe.open || this.state !== 'playing';
+      const uiBlock = this.safe.open || this.relicUi.open || this.state !== 'playing';
       const mv = uiBlock ? { x: 0, y: 0 } : this.input.moveVector();
       w.input.moveX = mv.x;
       w.input.moveY = mv.y;
@@ -629,7 +641,7 @@ export class App {
     if (w.countdown >= 0) ov.countdown(w.countdown, coop ? '安全门即将开启，任何人离开黄色区域都会取消' : '安全门即将开启，离开黄色区域可取消');
     if (w.combo.count >= 10) ov.combo(w.combo.count, w.combo.t);
     this.drawNotices(w, paused);
-    if (playing && !this.bag.open && !this.safe.open && p.standing && this.input.hasMouse && !paused) {
+    if (playing && !this.bag.open && !this.safe.open && !this.relicUi.open && p.standing && this.input.hasMouse && !paused) {
       const r: [number, number] = [1, 1];
       for (let i = 0; i < 2; i++) {
         const hs = p.hands[i];
@@ -709,6 +721,7 @@ export class App {
         sub = ITEMS[th.id].keep ? `可保留　${ITEMS[th.id].size} 格` : '即时生效';
       }
       else if (th.kind === 'gold') { color = '#ffd24a'; sub = '金币'; }
+      else if (th.kind === 'relic') { color = `hsl(${(w.time * 120) % 360},100%,70%)`; sub = '捡起后每个人都可以选择一个增益'; }
       const isNear = it === near;
       const how = it.auto ? '经过即可拾取' : `[${F}] 拾取`;
       ov.label(proj(it.x, it.y, 1.6), title, isNear ? `${how}　${sub}` : sub, color, isNear);
@@ -729,6 +742,7 @@ export class App {
       const full = w.run.hp >= w.run.maxHp - 0.01;
       ov.label(proj(r.medkit.x, r.medkit.y, 2.0), '医疗箱', dm < 1.6 ? (full ? '生命值已满' : `[${F}] 回满生命`) : full ? '生命值已满' : '回满生命', full ? '#8d939a' : '#ff6a7a', dm < 1.6 && !full);
     }
+    this.drawQuestUI(w);
     // 队友：头顶名字与血条；倒地时显示拉起进度
     if (w.net) {
       for (const r of w.net.remotes()) {
@@ -759,6 +773,8 @@ export class App {
       const be = w.bossEnemy;
       ov.arrow(proj(be.x, be.y, 1), cx, cy, '#ff4a3a', w.boss?.kind === 'mamba' ? '曼巴' : '牢大');
     }
+    // 第4.1次调整：区域任务的目标（离开安全屋一段时间后或找到过之后显示）
+    for (const a of w.quests.arrows()) ov.arrow(proj(a.x, a.y, 0.5), cx, cy, a.color, `${a.label} ${Math.round(Math.hypot(a.x - v.x, a.y - v.y))}m`);
     // 联机：倒地队友的相对位置（红色），其他队友（标识色）
     if (w.net) {
       for (const r of w.net.remotes()) {
@@ -768,12 +784,42 @@ export class App {
         else ov.arrow(proj(r.x, r.y, 0.5), cx, cy, SLOT_CSS[r.slot % 4], `${r.name} ${dist}m`);
       }
     }
-    // 精英头顶血条（受伤时）
+    // 精英头顶血条（受伤时）；异变体与奇物宝箱始终显示
     for (const e of w.enemies.list) {
-      if (e.dead || e.type === 'boss' || e.hp >= e.maxHp || (!e.elite && e.type !== 'iron')) continue;
+      if (e.dead || e.type === 'boss') continue;
+      if (e.type === 'chest' || e.mutant) {
+        if (Math.abs(e.x - v.x) > 22 || Math.abs(e.y - v.y) > 18) continue;
+        const chest = e.type === 'chest';
+        const pt = proj(e.x, e.y, chest ? 2.2 : 2.6);
+        ov.hpBar(pt, e.hp / e.maxHp, chest ? 60 : 54, chest ? '#ffd24a' : '#ff7aff');
+        ov.label(pt, chest ? '奇物宝箱' : '异变体', '', chest ? '#ffd24a' : `hsl(${(w.time * 120) % 360},100%,72%)`, false);
+        continue;
+      }
+      if (e.hp >= e.maxHp || (!e.elite && e.type !== 'iron')) continue;
       if (Math.abs(e.x - v.x) > 20 || Math.abs(e.y - v.y) > 16) continue;
       const pt = proj(e.x, e.y, 2.3 * (e.type === 'iron' ? 1.18 : 1));
       ov.hpBar(pt, e.hp / e.maxHp, 30, e.elite ? ['#fff', '#ffe14a', '#ff8a1a', '#ff3030'][e.elite] : '#c8c8c8');
+    }
+  }
+
+  /** 区域任务的场景标签（第4.1次调整） */
+  private drawQuestUI(w: World): void {
+    const q = w.quests;
+    if (!q.id || q.done || !w.phaseActive()) return;
+    const ov = this.overlay;
+    const v = w.view;
+    const proj = (x: number, y: number, hh: number) => this.renderer.project(x, y, hh);
+    const near = (x: number, y: number, r: number) => Math.hypot(x - v.x, y - v.y) < r;
+    if (q.id === 'signal' && near(q.sig.x, q.sig.y, 22)) {
+      const need = q.signalNeed();
+      ov.label(proj(q.sig.x, q.sig.y, 3.8), '信号区域', `站在圈里发送信号　${Math.floor(Math.min(need, q.progress))} / ${need} 秒`, '#4affe0', Math.hypot(q.sig.x - v.x, q.sig.y - v.y) < q.sig.r);
+    }
+    if (q.id === 'pyre') {
+      for (const p of q.pyres) if (!p.lit && near(p.x, p.y, 12)) ov.label(proj(p.x, p.y, 3.1), '可燃物堆', '用子弹或爆炸点燃', '#ff8a2a', false);
+    }
+    if (q.id === 'cargo') {
+      if (near(q.drop.x, q.drop.y, 24)) ov.label(proj(q.drop.x, q.drop.y, 2.4), '运载点', '把物资球推进来', '#ffd24a', false);
+      for (const b of q.balls) if (!b.done && near(b.x, b.y, 10)) ov.label(proj(b.x, b.y, 2.2), '物资球', '碰到它就能推着走', '#ffd24a', false);
     }
   }
 

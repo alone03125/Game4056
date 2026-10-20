@@ -2,6 +2,7 @@
 // 第3次调整：每个阶段 24000 生命，共 4 个阶段——3/4 血召唤精英、半血狂暴、1/4 血再次召唤；
 // 投掷技能改为连续锁定玩家当前位置、连续投出多块石头，预警到砸落的时间更短。
 // 第2版联机：AI 只在房主处运行，追击最近的玩家；其他玩家的 Boss 处于镜像模式，只接收状态。
+// 第4.1次调整：Boss 的碰撞、冲刺等伤害改为由被打的玩家本地判定（镜像模式下的 mirrorHits）。
 
 import { BOSS } from '../config';
 import { damp, wrapAngle, clamp } from '../util/math';
@@ -45,6 +46,36 @@ export interface BossAI {
   applyState(state: number, anim: number, enraged: boolean, throwPose: number, tele: number[][]): void;
   /** 生命条显示：当前阶段 / 总阶段数 */
   phaseInfo(): { phase: number; total: number };
+  /** 镜像模式：本地判定 Boss 对自己造成的伤害（第4.1次调整） */
+  mirrorHits(dt: number): void;
+}
+
+/** 镜像模式下本地判定的接触伤害与冲刺伤害（两种 Boss 共用） */
+export class MirrorContact {
+  private hitCd = 0;
+  private dashHit = false;
+
+  constructor(private w: World, private e: Enemy) {}
+
+  update(dt: number, dashing: boolean, dashKnock: number, bodyKnock: number): void {
+    const w = this.w, e = this.e, p = w.player;
+    if (this.hitCd > 0) this.hitCd -= dt;
+    if (!dashing) this.dashHit = false;
+    if (e.dead || !w.phaseActive() || !w.localTargetable()) return;
+    const dx = p.x - e.x, dy = p.y - e.y;
+    const d = Math.hypot(dx, dy) || 0.01;
+    if (dashing && !this.dashHit && d < e.r + p.r + 0.5) {
+      this.dashHit = true;
+      const sp = Math.hypot(e.vx, e.vy);
+      const a = sp > 1 ? Math.atan2(e.vy, e.vx) : e.face;
+      if (w.damagePlayer(e.atk, e.x, e.y, e.id)) { p.kx += Math.cos(a) * dashKnock; p.ky += Math.sin(a) * dashKnock; w.fx.shake(1); }
+      return;
+    }
+    if (d < e.r + p.r && this.hitCd <= 0) {
+      this.hitCd = 1.2;
+      if (w.damagePlayer(e.atk, e.x, e.y, e.id)) { p.kx += (dx / d) * bodyKnock; p.ky += (dy / d) * bodyKnock; }
+    }
+  }
 }
 
 const r2 = (v: number) => Math.round(v * 100) / 100;
@@ -101,10 +132,12 @@ export class Boss implements BossAI {
   private focus: Target | null = null;
   private volley = 0; // 本轮还要投出的石头数
   private volleyT = 0;
+  private mc: MirrorContact;
 
   constructor(private w: World, e: Enemy, mirror = false) {
     this.e = e;
     this.mirror = mirror;
+    this.mc = new MirrorContact(w, e);
     if (!mirror) {
       w.fxAll('sound', 'bossRoar', e.x, e.y, 1);
       w.fxAll('shake', 0.8);
@@ -157,17 +190,18 @@ export class Boss implements BossAI {
     }
   }
 
-  /** 对一名玩家造成伤害（本地玩家直接结算；远程玩家发送命中消息） */
+  /** 对一名玩家造成伤害：房主只结算自己，其他玩家在本地判定（见 mirrorHits） */
   private hit(t: Target, dmg: number, kx: number, ky: number): boolean {
     const w = this.w;
-    if (t.local) {
-      if (!w.damagePlayer(dmg, this.e.x, this.e.y)) return false;
-      w.player.kx += kx;
-      w.player.ky += ky;
-      return true;
-    }
-    w.net?.hitRemote(t.id, dmg, this.e.x, this.e.y, kx, ky);
+    if (!t.local) return false;
+    if (!w.damagePlayer(dmg, this.e.x, this.e.y, this.e.id)) return false;
+    w.player.kx += kx;
+    w.player.ky += ky;
     return true;
+  }
+
+  mirrorHits(dt: number): void {
+    this.mc.update(dt, this.state === 'dash', 14, 8);
   }
 
   updateAI(e: Enemy, dt: number): void {

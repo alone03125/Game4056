@@ -9,6 +9,7 @@ import type { World } from '../game/world';
 import type { WorldItem } from '../game/pickups';
 import type { RemotePlayer } from '../game/net';
 import { FANCY_IRI, FANCY_SHINY } from '../game/projectiles';
+import { RELIC } from '../data/relics';
 
 /** 第2版联机：每名玩家的标识颜色（按房间内的编号） */
 export const SLOT_COLORS = [0x4affe0, 0xffb03a, 0xff5ac8, 0x9aff4a];
@@ -218,7 +219,7 @@ export class EntityView {
     for (const t of ENEMY_TYPES) counts[t] = 0;
     let rings = 0;
     for (const e of w.enemies.list) {
-      if (e.dead || e.type === 'boss') continue;
+      if (e.dead || e.type === 'boss' || e.type === 'chest') continue;
       const b = this.zombies.get(e.type)!;
       const i = counts[e.type]++;
       if (i >= MAX_Z) continue;
@@ -245,15 +246,17 @@ export class EntityView {
       if (e.burnT > 0) { gr += 0.5; gg += 0.18; }
       if (e.slowT > 0) { gb += 0.45; gg += 0.25; }
       if (stun) { const k = 0.35 + Math.sin(time * 8 + e.id) * 0.1; gr += k; gg += k * 0.85; }
+      // 第4.1次调整：异变体——全身流转的虹彩光芒
+      if (e.mutant) { tmpCol.setHSL((time * 0.35 + e.id * 0.1) % 1, 1, 0.5); gr += tmpCol.r * 0.55; gg += tmpCol.g * 0.55; gb += tmpCol.b * 0.55; }
       b.glow.setXYZ(i, gr, gg, gb);
-      if (e.elite && rings < 160) {
+      if ((e.elite || e.mutant) && rings < 160) {
         dummy.position.set(e.x, 0.04, -e.y);
         dummy.rotation.set(-Math.PI / 2, 0, time * 2);
-        const rs = e.r * 3.2;
+        const rs = e.r * (e.mutant ? 4.4 + Math.sin(time * 5) * 0.4 : 3.2);
         dummy.scale.set(rs, rs, 1);
         dummy.updateMatrix();
         this.eliteRings.setMatrixAt(rings, dummy.matrix);
-        this.eliteRings.setColorAt(rings, tmpCol.setHex(ELITE_COLORS[e.elite]));
+        this.eliteRings.setColorAt(rings, e.mutant ? tmpCol.setHSL((time * 0.5 + e.id * 0.1) % 1, 1, 0.6) : tmpCol.setHex(ELITE_COLORS[e.elite]));
         rings++;
       }
     }
@@ -295,6 +298,10 @@ export class EntityView {
     const run = w.run;
     rig.root.position.set(p.x, 0, -p.y);
     rig.root.rotation.y = p.face;
+    // 第4.1次调整：天生神力——体型 +80%
+    const big = run.has('might') ? RELIC.mightScale : 1;
+    rig.root.scale.setScalar(big);
+    this.playerRing.scale.setScalar(big);
     // 主菜单背景（showcase）里的世界没有玩家：不显示玩家模型，避免在巡游镜头中央看到穿墙的人物
     rig.root.visible = !w.showcase && (p.alive || !w.net);
     this.playerRing.position.set(p.x, 0.05, -p.y);
@@ -374,6 +381,9 @@ export class EntityView {
     if (r.dead) return;
     rig.root.position.set(r.x, 0, -r.y);
     rig.root.rotation.y = r.face;
+    const big = r.prof?.relics?.includes('might') ? RELIC.mightScale : 1;
+    rig.root.scale.setScalar(big);
+    v.ring.scale.setScalar(big);
     v.ring.position.set(r.x, 0.05, -r.y);
     (v.ring.material as THREE.MeshBasicMaterial).opacity = 0.4 + Math.sin(time * 4 + r.id) * 0.12;
     if (v.suit !== r.suit) {
@@ -644,6 +654,13 @@ export class EntityView {
       v.model.rotation.y = time * 1.2 + it.uid;
       (v.beam.material as THREE.MeshBasicMaterial).opacity = 0.45 + Math.sin(time * 3 + it.uid) * 0.15;
       v.ring.rotation.z = time;
+      // 奇物：颜色流转
+      if (it.thing.kind === 'relic') {
+        const c = tmpCol.setHSL((time * 0.3) % 1, 1, 0.65);
+        (v.beam.material as THREE.MeshBasicMaterial).color.copy(c);
+        (v.ring.material as THREE.MeshBasicMaterial).color.copy(c);
+        v.model.traverse((o) => { const m = (o as THREE.Mesh).material as THREE.MeshBasicMaterial | undefined; if (m && (m as any).isMeshBasicMaterial) m.color.copy(c); });
+      }
     }
     for (const [uid, v] of this.items) {
       if (!alive.has(uid)) { v.g.removeFromParent(); this.items.delete(uid); }
@@ -665,6 +682,8 @@ export class EntityView {
     } else if (th.kind === 'item') {
       color = new THREE.Color(ITEMS[th.id].color).getHex();
       model = itemModel(th.id, color);
+    } else if (th.kind === 'relic') {
+      model = relicModel();
     } else {
       model = new THREE.Group();
     }
@@ -708,6 +727,20 @@ export class EntityView {
     if (this.hazardGlow.instanceColor) this.hazardGlow.instanceColor.needsUpdate = true;
     this.vortexCore.instanceMatrix.needsUpdate = true;
   }
+}
+
+/** 奇物：悬浮的八面体晶体与环绕的金环 */
+function relicModel(): THREE.Object3D {
+  const g = new THREE.Group();
+  const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.36, 0), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+  core.scale.set(1, 1.5, 1);
+  const shell = new THREE.Mesh(new THREE.OctahedronGeometry(0.5, 0), new THREE.MeshBasicMaterial({ color: 0xffffff, wireframe: true, transparent: true, opacity: 0.6 }));
+  shell.scale.set(1, 1.5, 1);
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(0.62, 0.035, 6, 24), new THREE.MeshLambertMaterial({ color: 0xffc83a, emissive: 0x6a4a00 }));
+  ring.rotation.x = Math.PI / 2.4;
+  g.add(core, shell, ring);
+  g.scale.setScalar(1.2);
+  return g;
 }
 
 function bulletModel(color: number): THREE.Object3D {

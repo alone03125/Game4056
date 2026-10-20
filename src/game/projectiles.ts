@@ -2,12 +2,15 @@
 // 第2版：每个投射物记录发射者；其他玩家射出的子弹在本地以“影子”模拟（只负责显示和友伤判定，
 // 对丧尸的伤害由发射者本人结算）。玩家的子弹对玩家（包括自己）只造成 5% 的伤害。
 
-import { Bullet, BulletDef, BULLETS, BULLET_IDS, BUTTER, areaRadius, hitRadius } from '../data/bullets';
+import { Bullet, BulletDef, BULLETS, BUTTER, CastMods, IRI, PROJ_IDS, projDef, SHINY, SPECIAL_DEFS, SpecialId, areaRadius, hitRadius } from '../data/bullets';
 import { GunStats } from '../data/guns';
+import { RELIC } from '../data/relics';
 import { clamp, DEG, wrapAngle } from '../util/math';
 import { globalRng } from '../util/rng';
-import { Enemy, MAX_ENEMY_R } from './enemies';
+import { DmgSrc, Enemy, isNormalZombie, MAX_ENEMY_R } from './enemies';
 import type { World } from './world';
+
+export type { CastMods };
 
 export const PROJ_SPEED = 0.45; // 子弹 Spd 数值 → 米/秒 的换算
 const MAX_PROJ = 1400;
@@ -56,6 +59,7 @@ export interface Proj {
   fuse: number; // 感应地雷：触发后的引信倒计时（秒）
   kb: number; // 修饰语“强劲”：按伤害附加的击退力度
   butter: boolean; // 第4次调整：玉米粒变成的黄油
+  relic: boolean; // 第4.1次调整：奇物射出的箭 / 短刀（固定伤害，不触发奇物的命中效果）
 }
 
 /** 感应地雷被触发后延迟爆炸的时间：给玩家留出离开的机会，不会每次都炸到自己 */
@@ -73,15 +77,6 @@ export interface Hazard {
   tick: number;
   ghost: boolean; // 其他玩家的区域效果：只显示与友伤
   pullOnly: boolean; // 主机替其他玩家模拟的奇点吸引（不显示、不伤害）
-}
-
-export interface CastMods {
-  homing?: boolean;
-  pierce?: number;
-  blast?: boolean;
-  dmg?: number;
-  speed?: number;
-  focus?: number;
 }
 
 interface HitRec { t: number; e: Enemy }
@@ -114,18 +109,28 @@ export class Projectiles {
       dead: false, kind: 'bullet', def: BULLETS.std, x: 0, y: 0, px: 0, py: 0, vx: 0, vy: 0, dmg: 0, r: 0.1, area: 0,
       age: 0, life: 1, traveled: 0, maxDist: 26, pierce: 0, wallBounce: 0, enemyBounce: 0, hits: [], hitT: [],
       state: 0, color: 0xffffff, scale: 1, spin: 0, target: null, retarget: 0, fragment: false, z: 1.1, homing: false, blast: false,
-      owner: 0, ghost: false, bounced: false, hitP: [], fancy: 0, fuse: 0, kb: 0, butter: false,
+      owner: 0, ghost: false, bounced: false, hitP: [], fancy: 0, fuse: 0, kb: 0, butter: false, relic: false,
     };
   }
 
   /** 枪械射出一发子弹（可能包含多个弹丸） */
   fire(stats: GunStats, b: Bullet, ox: number, oy: number, aim: number, mods: CastMods = {}): void {
     const def = BULLETS[b.def];
-    const count = def.count ?? 1;
-    const S = clamp(stats.spread + b.deg - (mods.focus ?? 0), 0, 360) * DEG;
-    const dmg = b.atk * stats.atk * (mods.dmg ?? 1);
+    // 第4.1次调整：二重分裂模块让这一发分裂成 2 倍
+    const multi = Math.max(1, Math.round(mods.multi ?? 1));
+    const count = (def.count ?? 1) * multi;
+    let S = clamp(stats.spread + b.deg - (mods.focus ?? 0), 0, 360) * DEG;
+    // 分裂出来的子弹至少稍微错开，不会完全重叠
+    if (multi > 1 && !def.flags?.ring) S = Math.max(S, 10 * DEG * (multi - 1));
+    let dmg = b.atk * stats.atk * (mods.dmg ?? 1);
+    let fancy = (b.shiny ? FANCY_SHINY : 0) | (b.iri ? FANCY_IRI : 0);
+    // 闪耀虹彩模块：发射时变为闪耀虹彩（已经是闪耀 / 虹彩的部分不重复加成）
+    if (mods.shine) {
+      if (!b.shiny) dmg *= SHINY.mul;
+      if (!b.iri) dmg *= IRI.mul;
+      fancy = FANCY_SHINY | FANCY_IRI;
+    }
     const spdMul = mods.speed ?? 1;
-    const fancy = (b.shiny ? FANCY_SHINY : 0) | (b.iri ? FANCY_IRI : 0);
     for (let i = 0; i < count; i++) {
       let a: number;
       if (def.flags?.ring) a = aim + (i / count) * Math.PI * 2;
@@ -145,6 +150,23 @@ export class Projectiles {
         this.w.net?.projSpawned(p);
       }
     }
+  }
+
+  /** 奇物射出的箭 / 短刀（第4.1次调整）：固定伤害，追踪目标 */
+  fireSpecial(id: SpecialId, x: number, y: number, a: number, target: Enemy | null): void {
+    const def = SPECIAL_DEFS[id];
+    if (this.list.length >= MAX_PROJ) return;
+    const p = this.alloc();
+    const sp = def.spd * PROJ_SPEED;
+    this.init(p, def, x, y, Math.cos(a) * sp, Math.sin(a) * sp, def.atk, 0.16, 0, 1);
+    p.owner = this.w.myId;
+    p.ghost = false;
+    p.relic = true;
+    p.target = target;
+    p.retarget = 0.4;
+    p.life = 2;
+    this.list.push(p);
+    this.w.net?.projSpawned(p);
   }
 
   private makeButter(p: Proj): void {
@@ -197,6 +219,7 @@ export class Projectiles {
     p.fuse = 0;
     p.kb = 0;
     p.butter = false;
+    p.relic = false;
     switch (def.kind) {
       case 'bomb': p.life = 2.5; p.maxDist = 999; break;
       case 'rocket': p.life = 3; p.maxDist = 60; break;
@@ -219,14 +242,14 @@ export class Projectiles {
   /** 联机：把投射物编码成数组发送给其他玩家 */
   static encode(p: Proj): number[] {
     const r2 = (v: number) => Math.round(v * 100) / 100;
-    return [BULLET_IDS.indexOf(p.def.id), r2(p.x), r2(p.y), r2(p.vx), r2(p.vy), Math.round(p.dmg * 10) / 10, r2(p.r), r2(p.area), r2(p.life), r2(p.maxDist), p.pierce,
+    return [PROJ_IDS.indexOf(p.def.id), r2(p.x), r2(p.y), r2(p.vx), r2(p.vy), Math.round(p.dmg * 10) / 10, r2(p.r), r2(p.area), r2(p.life), r2(p.maxDist), p.pierce,
       p.wallBounce, p.enemyBounce, (p.homing ? 1 : 0) | (p.blast ? 2 : 0) | (p.fancy << 2) | (p.butter ? 16 : 0), r2(p.scale)];
   }
 
   /** 联机：其他玩家射出的子弹（影子） */
   spawnGhost(a: number[], owner: number): void {
     if (this.list.length >= MAX_PROJ) return;
-    const def = BULLETS[BULLET_IDS[a[0]]];
+    const def = projDef(PROJ_IDS[a[0]]);
     if (!def) return;
     const p = this.alloc();
     this.init(p, def, a[1], a[2], a[3], a[4], a[5], a[6], a[7], a[14]);
@@ -235,6 +258,7 @@ export class Projectiles {
     if (a[13] & 16) { p.butter = true; p.color = BUTTER.color; }
     p.owner = owner;
     p.ghost = true;
+    p.relic = def.weight === 0;
     this.list.push(p);
   }
 
@@ -304,7 +328,7 @@ export class Projectiles {
       if (h.t >= h.dur) {
         h.dead = true;
         if (h.kind === 'vortex' && !h.pullOnly) {
-          this.explode(h.x, h.y, 4, h.atk * 10, 0xa040ff, 6, null, h.ghost);
+          this.explode(h.x, h.y, 4, h.atk * 9, 0xa040ff, 6, null, h.ghost);
           w.fx.sound('explosion', h.x, h.y, 0.8);
         }
       }
@@ -502,6 +526,8 @@ export class Projectiles {
     }
     if (tWall >= 0) {
       const hx = p.x + (nx - p.x) * tWall, hy = p.y + (ny - p.y) * tWall;
+      // 第4.1次调整：子弹打中可燃物堆时点燃它
+      if (!p.ghost) w.quests.onShot(hx, hy, p.r);
       if (p.kind === 'rocket') { p.x = hx - nTmp.x * 0.1; p.y = hy - nTmp.y * 0.1; this.explodeProj(p); return; }
       if (p.kind === 'toxic') { p.x = hx - nTmp.x * 0.3; p.y = hy - nTmp.y * 0.3; this.toCloud(p); return; }
       if (p.kind === 'singular') { p.x = hx - nTmp.x * 0.4; p.y = hy - nTmp.y * 0.4; this.toVortex(p); return; }
@@ -539,6 +565,7 @@ export class Projectiles {
     if (t >= 0) {
       p.x += (nx - p.x) * t + nTmp.x * 0.02;
       p.y += (ny - p.y) * t + nTmp.y * 0.02;
+      if (!p.ghost) this.w.quests.onShot(p.x, p.y, p.r);
       if (nTmp.x !== 0) p.vx = -p.vx * restitution;
       if (nTmp.y !== 0) p.vy = -p.vy * restitution;
       return true;
@@ -672,12 +699,55 @@ export class Projectiles {
     }
     w.enemies.applyKnock(e, dirX, dirY, (f?.knock ?? 0.8) + p.kb);
     if (f?.leech) w.healPlayer(Math.min(3, dmg * 0.04), true);
-    w.enemies.damage(e, dmg, { gold: f?.gold, burnDps: f?.burn ? dmg * 0.4 : 0, slow: f?.slow });
+    // 第4.1次调整：奇物的命中效果（奇物自己射出的箭和短刀不触发）
+    const run = w.run;
+    const own = !p.relic;
+    let color: string | undefined;
+    let execute = false;
+    if (own && run.has('crit') && globalRng.chance(RELIC.critChance)) {
+      dmg *= RELIC.critMul;
+      color = '#ff5aff';
+      execute = isNormalZombie(e);
+      w.fx.sparks(e.x, e.y, 0xff5aff, 8, 5);
+    }
+    const src: DmgSrc = this.relicSrc(dmg, own);
+    src.gold = f?.gold;
+    src.slow = f?.slow;
+    if (f?.burn) src.burnDps = (src.burnDps ?? 0) + dmg * 0.4;
+    src.execute = execute;
+    w.enemies.damage(e, dmg, src, color);
     if (p.blast) {
-      this.explode(e.x, e.y, 2, dmg * 0.6, 0xff8a4a, 3, { gold: f?.gold });
+      this.explode(e.x, e.y, 2, dmg * 0.6, 0xff8a4a, 3, { ...this.relicSrc(dmg * 0.6, own), gold: f?.gold });
       w.fx.sound('smallExplosion', e.x, e.y, 0.5);
     }
     if (f?.chain) this.chain(e, dmg, f.chain, false);
+    if (own && run.has('shock')) this.shock(e, dmg);
+  }
+
+  /** 灼烧疗法 / 腐蚀疗法附带在伤害上的效果 */
+  private relicSrc(dmg: number, own: boolean): DmgSrc {
+    const run = this.w.run;
+    const src: DmgSrc = {};
+    if (!own) return src;
+    if (run.has('burn')) src.burnDps = dmg * RELIC.burnPct;
+    if (run.has('corrode')) src.corrode = true;
+    return src;
+  }
+
+  /** 电击疗法：把这次伤害的 45% 传导给附近的 2 名敌人 */
+  private shock(from: Enemy, dmg: number): void {
+    const w = this.w;
+    const pts: number[] = [];
+    const used = new Set<number>([from.id]);
+    for (let i = 0; i < RELIC.shockTargets; i++) {
+      const o = w.enemies.nearest(from.x, from.y, RELIC.shockRange, (x) => used.has(x.id));
+      if (!o) break;
+      used.add(o.id);
+      pts.push(from.x, from.y, o.x, o.y);
+      o.flash = 0.1;
+      w.enemies.damage(o, dmg * RELIC.shockPct, null, '#9ab8ff');
+    }
+    if (pts.length) w.fx.arcs(pts);
   }
 
   private chain(from: Enemy, dmg: number, jumps: number, ghost: boolean): void {
@@ -745,7 +815,7 @@ export class Projectiles {
     if (p.dead) return;
     p.dead = true;
     const r = p.area;
-    this.explode(p.x, p.y, r, p.dmg, p.color, 5 + r + p.kb, null, p.ghost);
+    this.explode(p.x, p.y, r, p.dmg, p.color, 5 + r + p.kb, p.ghost ? null : this.relicSrc(p.dmg, !p.relic), p.ghost);
     this.w.fx.sound(r > 3.2 ? 'explosion' : 'smallExplosion', p.x, p.y, 1);
   }
 
@@ -759,9 +829,10 @@ export class Projectiles {
   }
 
   /** 范围爆炸：对范围内的所有敌人造成伤害并击退 */
-  explode(x: number, y: number, r: number, dmg: number, color: number, knock: number, src: { gold?: boolean } | null, ghost = false): void {
+  explode(x: number, y: number, r: number, dmg: number, color: number, knock: number, src: DmgSrc | null, ghost = false): void {
     const w = this.w;
     if (!ghost) {
+      w.quests.onShot(x, y, r);
       w.enemies.hash.queryRadius(x, y, r + MAX_ENEMY_R, (e, d2) => {
         const rr = r + e.r;
         if (d2 > rr * rr) return;

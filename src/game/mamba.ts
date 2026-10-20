@@ -6,7 +6,7 @@
 import { MAMBA } from '../config';
 import { clamp, damp, wrapAngle } from '../util/math';
 import { globalRng } from '../util/rng';
-import { BossAI, decodeTele, Telegraph, throwRock, tickTeles } from './boss';
+import { BossAI, decodeTele, MirrorContact, Telegraph, throwRock, tickTeles } from './boss';
 import type { Enemy } from './enemies';
 import type { Target } from './net';
 import type { World } from './world';
@@ -55,10 +55,14 @@ export class Mamba implements BossAI {
   private contactCd = new Map<number, number>();
   private beamCd = new Map<number, number>();
   private focus: Target | null = null;
+  private mc: MirrorContact;
+  private mBeamCd = 0;
+  private mWave = false;
 
   constructor(private w: World, e: Enemy, mirror = false) {
     this.e = e;
     this.mirror = mirror;
+    this.mc = new MirrorContact(w, e);
     if (!mirror) {
       w.fxAll('sound', 'bossRoar', e.x, e.y, 1);
       w.fxAll('shake', 1);
@@ -121,16 +125,47 @@ export class Mamba implements BossAI {
     }
   }
 
+  /** 房主只结算自己，其他玩家在本地判定（见 mirrorHits） */
   private hit(t: Target, dmg: number, kx: number, ky: number): boolean {
     const w = this.w;
-    if (t.local) {
-      if (!w.damagePlayer(dmg, this.e.x, this.e.y)) return false;
-      w.player.kx += kx;
-      w.player.ky += ky;
-      return true;
-    }
-    w.net?.hitRemote(t.id, dmg, this.e.x, this.e.y, kx, ky);
+    if (!t.local) return false;
+    if (!w.damagePlayer(dmg, this.e.x, this.e.y, this.e.id)) return false;
+    w.player.kx += kx;
+    w.player.ky += ky;
     return true;
+  }
+
+  /** 镜像模式：本地判定冲撞、接触、激光与冲击波（第4.1次调整） */
+  mirrorHits(dt: number): void {
+    const w = this.w, e = this.e, p = w.player;
+    this.mc.update(dt, this.state === 'charge', 16, 9);
+    if (this.mBeamCd > 0) this.mBeamCd -= dt;
+    const ring = this.telegraphs.some((t) => t.kind === 'ring');
+    if (!ring) this.mWave = false;
+    if (e.dead || !w.phaseActive() || !w.localTargetable()) return;
+    const ox = p.x - e.x, oy = p.y - e.y;
+    if (ring && !this.mWave) {
+      this.mWave = true;
+      const dd = Math.hypot(ox, oy) || 0.01;
+      if (dd <= SK.waveRadius + p.r) {
+        // 强制击退：即使处于无敌时间也会被推开
+        w.damagePlayer(e.atk * 0.5, e.x, e.y, e.id);
+        p.kx += (ox / dd) * SK.waveKnock; p.ky += (oy / dd) * SK.waveKnock;
+      }
+    }
+    if (this.state !== 'laser' || this.mBeamCd > 0) return;
+    for (const b of this.telegraphs) {
+      if (b.kind !== 'beam') continue;
+      const c = Math.cos(b.a), s = Math.sin(b.a);
+      const along = ox * c + oy * s;
+      if (along < e.r * 0.5 || along > b.len + p.r) continue;
+      const perp = -ox * s + oy * c;
+      if (Math.abs(perp) > b.r + p.r) continue;
+      this.mBeamCd = 0.4;
+      const side = perp >= 0 ? 1 : -1;
+      if (w.damagePlayer(e.atk * 0.32, e.x, e.y, e.id)) { p.kx += -s * side * 7; p.ky += c * side * 7; }
+      break;
+    }
   }
 
   updateAI(e: Enemy, dt: number): void {
@@ -321,10 +356,11 @@ export class Mamba implements BossAI {
               if (dd > SK.waveRadius + t.r) continue;
               // 强制击退：即使处于无敌时间也会被推开
               const kx = (ox / dd) * SK.waveKnock, ky = (oy / dd) * SK.waveKnock;
+              // 远程玩家在本地判定（见 mirrorHits）
               if (t.local) {
-                w.damagePlayer(e.atk * 0.5, e.x, e.y);
+                w.damagePlayer(e.atk * 0.5, e.x, e.y, e.id);
                 w.player.kx += kx; w.player.ky += ky;
-              } else w.net?.hitRemote(t.id, e.atk * 0.5, e.x, e.y, kx, ky);
+              }
             }
           }
           this.waveCd = this.enraged ? 3.5 : 5;

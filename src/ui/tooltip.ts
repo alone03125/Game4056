@@ -42,8 +42,10 @@ export class Tooltip {
 const f2 = (v: number) => v.toFixed(2);
 const sg = (v: number, d = 2) => (v >= 0 ? '+' : '') + v.toFixed(d);
 
-export function gunTip(g: Gun, run: RunState | null, extra = ''): string {
-  const st = gunStats(g, run && run.overheatT > 0 ? 3 : 0);
+/** hand：装备在哪只手上（-1 不在手上）；数值含全局强化零件1型与奇物的加成（第4.1次调整） */
+export function gunTip(g: Gun, run: RunState | null, extra = '', hand = -1): string {
+  const st = run ? run.handStats(g, hand) : gunStats(g);
+  const bonus = run ? run.atkBonus() : 0;
   const cmp = (base: number, eff: number, lowerBetter: boolean, fmt: (v: number) => string) => {
     if (Math.abs(base - eff) < 0.005) return `<b>${fmt(eff)}</b>`;
     const better = lowerBetter ? eff < base : eff > base;
@@ -61,10 +63,10 @@ export function gunTip(g: Gun, run: RunState | null, extra = ''): string {
 <span>攻击倍率</span><span>${cmp(g.atk, st.atk, false, (v) => f2(v) + 'x')}</span><span></span>
 <span>射击延迟</span><span>${cmp(g.delay, st.delay, true, (v) => f2(v) + 's')}</span><span></span>
 <span>换弹延迟</span><span>${cmp(g.reload, st.reload, true, (v) => f2(v) + 's')}</span><span></span>
-<span>最大载弹</span><span><b>${g.cap}</b> <span style="color:#777">（已装 ${st.loaded}）</span></span><span></span>
+<span>最大载弹</span><span><b style="${st.cap < g.cap ? 'color:#ff9a6a' : ''}">${st.cap}</b>${st.cap < g.cap ? ` <span style="color:#777">(${g.cap})</span>` : ''} <span style="color:#777">（已装 ${st.loaded}）</span></span><span></span>
 <span>散射角度</span><span><b style="color:${st.spread > 0 ? '#ff8a6a' : '#6aff8a'}">${st.spread.toFixed(0)}°</b>${Math.abs(st.spread - g.spread) > 0.5 ? ` <span style="color:#777">(${g.spread}°)</span>` : ''}</span><span></span>
 </div>
-${modNote}<div class="mods">理论单体 DPS ≈ ${gunDps(g, run && run.overheatT > 0 ? 3 : 0).toFixed(0)}</div>${negNote}
+${modNote}${bonus > 0.001 ? `<div class="mods" style="color:#ffb03a">攻击倍率加成 +${f2(bonus)}x（对所有枪生效）</div>` : ''}<div class="mods">理论单体 DPS ≈ ${gunDps(g, bonus).toFixed(0)}</div>${negNote}
 <hr>${bl}${extra}`;
 }
 
@@ -81,13 +83,16 @@ ${mods.length ? `<div class="mods">数值补正：${mods.join('  ')}</div>` : ''
   }
   if (d.logic) {
     const mods: string[] = [];
+    if (d.mods.atk) mods.push(`${sg(d.mods.atk)} 攻击倍率`);
     if (d.mods.delay) mods.push(`${sg(d.mods.delay)} 射击延迟`);
     if (d.mods.reload) mods.push(`${sg(d.mods.reload)} 换弹延迟`);
+    if (d.mods.reloadMul) mods.push(`换弹时间 -${Math.round((1 - d.mods.reloadMul) * 100)}%`);
+    if (d.mods.half) mods.push('载弹量减半');
     return `<h4 style="color:#${d.color.toString(16).padStart(6, '0')}">${d.name}</h4>
 <div class="sub">逻辑模块　占用背包 1 单位　装进枪械槽位使用</div>
 <div class="eff">${d.effect}</div>
 ${mods.length ? `<div class="mods">数值补正：${mods.join('  ')}</div>` : ''}
-<div class="rc">模块本身不射出子弹，也不产生后坐力；它作用于排在它后面的子弹。</div>${extra}`;
+<div class="rc">${d.logic.copy ? '复制模块会当作它前面的那发子弹射出。' : '模块本身不射出子弹，也不产生后坐力；它作用于排在它后面的子弹。'}</div>${extra}`;
   }
   const row = (name: string, v: string, r: number) => `<span>${name}</span><span><b style="color:${rollColor(r)}">${v}</b></span><span></span>`;
   const mods: string[] = [];
@@ -100,7 +105,7 @@ ${mods.length ? `<div class="mods">数值补正：${mods.join('  ')}</div>` : ''
     const lines: string[] = [];
     run.guns.forEach((g, h) => {
       if (!g) return;
-      const st = gunStats(g);
+      const st = run.handStats(g, h);
       const info = recoilOf(b.rc * st.recoilMul, st.delay, run.recoilResist, RECOIL.t1, RECOIL.t2);
       lines.push(`${h === 0 ? '主手' : '副手'}：${info.label}`);
     });
@@ -134,6 +139,6 @@ export function itemTip(it: BagItem, run: RunState | null, extra = ''): string {
 ${gradeNote}<div class="eff">${itemEffect(it)}</div>${extra}`;
 }
 
-export function goldTip(amount: number): string {
-  return `<h4 style="color:#ffd24a">金币 ×${amount}</h4><div class="sub">一堆最多 ${PLAYER.goldPerUnit} 金币，占用 1 单位背包</div><div class="eff">到达安全屋时会全部暂存，之后无需携带。</div><div class="act">拖出背包 / 右键：丢在地上，腾出背包空间</div>`;
+export function goldTip(amount: number, unit = PLAYER.goldPerUnit): string {
+  return `<h4 style="color:#ffd24a">金币 ×${amount}</h4><div class="sub">一堆最多 ${unit} 金币，占用 1 单位背包</div><div class="eff">到达安全屋时会全部暂存，之后无需携带。</div><div class="act">拖出背包 / 右键：丢在地上，腾出背包空间</div>`;
 }
