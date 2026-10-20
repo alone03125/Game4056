@@ -15,7 +15,8 @@ import type { LobbyState } from '../net/transport';
 import type { RunState } from '../game/state';
 import { fmtNum, fmtTime } from '../util/math';
 import { clear, h } from './dom';
-import { bulletIcon, glyphIcon, gunIcon, itemIcon, relicIcon } from './icons';
+import { bulletIcon, gunIcon, itemIcon } from './icons';
+import { enemyIcon, questIcon, relicIcon } from './art';
 
 export interface MenuActions {
   start(diff: Difficulty, seed: number | null): void;
@@ -451,7 +452,6 @@ export class Menus {
         if (L.shine) fx.push(stat('闪耀虹彩', '下一发', 'good'));
         if (L.loop) fx.push(stat('循环', '下一发', 'good'));
         if (L.short) fx.push(stat('换弹时间', '90% 减半 / 10% ×4'));
-        if (L.smelt) fx.push(stat('熔炼', '后两发合一', 'good'));
         if (L.multi) fx.push(stat('分裂', `×${L.multi}`, 'good'));
         if (L.copy) fx.push(stat('复制', '前一发子弹', 'good'));
         if (d.mods.reloadMul) fx.push(stat('换弹时间', `-${Math.round((1 - d.mods.reloadMul) * 100)}%`, 'good'));
@@ -512,25 +512,25 @@ export class Menus {
       body.appendChild(h('p', { style: 'color:#8d939a;margin:0 0 8px' }, '以下为第一区、普通难度下的基础数值。越往后的区域、辐射越高，丧尸越强。'));
       const grid = h('div', { class: 'cx-grid' });
       const spd = (v: number) => (v >= 4.8 ? '快' : v >= 4.2 ? '中等' : '慢');
-      const zombie = (glyph: string, color: string, name: string, s: [string, string][], desc: string) =>
-        grid.appendChild(card(glyphIcon(glyph, color), h('b', { class: 'cx-t', style: `color:${color}` }, name),
+      const zombie = (icon: string, color: string, name: string, s: [string, string][], desc: string) =>
+        grid.appendChild(card(icon, h('b', { class: 'cx-t', style: `color:${color}` }, name),
           h('div', { class: 'cx-row' }, ...s.map(([k, v]) => stat(k, v))), h('div', { class: 'cx-eff' }, desc)));
       const base = (t: keyof typeof ENEMIES): [string, string][] => [['生命', String(ENEMIES[t].hp)], ['攻击', String(ENEMIES[t].atk)], ['速度', spd(ENEMIES[t].speed)], ['金币', String(ENEMIES[t].gold)]];
-      zombie('社', '#c8b8a0', ENEMIES.office.name, base('office'), '最常见的丧尸，数量众多。');
-      zombie('铁', '#9aa4b0', ENEMIES.iron.name, base('iron'), '皮糙肉厚、体型高大，不容易被击退，受伤后头顶会显示血条。');
-      zombie('跑', '#ff9a6a', ENEMIES.runner.name, base('runner'), '跑得飞快，从第二区开始出现。');
-      zombie('吐', '#9aff4a', ENEMIES.spitter.name, base('spitter'), '会和你保持距离，远远地吐出口水；从第三区开始出现。');
-      zombie('爆', '#6aff6a', ENEMIES.creeper.name, [['生命', String(ENEMIES.creeper.hp)], ['爆炸伤害', String(CREEPER.boom)], ['金币', `${ENEMIES.creeper.gold}（被打死）/ ${CREEPER.nearGold}`]],
+      zombie(enemyIcon('office'), '#c8b8a0', ENEMIES.office.name, base('office'), '最常见的丧尸，数量众多。');
+      zombie(enemyIcon('iron'), '#9aa4b0', ENEMIES.iron.name, base('iron'), '皮糙肉厚、体型高大，不容易被击退，受伤后头顶会显示血条。');
+      zombie(enemyIcon('runner'), '#ff9a6a', ENEMIES.runner.name, base('runner'), '跑得飞快，从第二区开始出现。');
+      zombie(enemyIcon('spitter'), '#9aff4a', ENEMIES.spitter.name, base('spitter'), '会和你保持距离，远远地吐出口水；从第三区开始出现。');
+      zombie(enemyIcon('creeper'), '#6aff6a', ENEMIES.creeper.name, [['生命', String(ENEMIES.creeper.hp)], ['爆炸伤害', String(CREEPER.boom)], ['金币', `${ENEMIES.creeper.gold}（被打死）/ ${CREEPER.nearGold}`]],
         '靠近你或者被打死后会嘶嘶作响，地面出现红色的爆炸范围，2 秒后爆炸；爆炸也会波及周围的丧尸，对丧尸的伤害更高。');
-      zombie('异', '#ff7aff', '异变体', [['生命', `同类的 ${MUTANT.hp} 倍`], ['攻击', `同类的 ${MUTANT.atk} 倍`], ['速度', `同类的 ${MUTANT.speed} 倍`]],
+      zombie(enemyIcon('mutant'), '#ff7aff', '异变体', [['生命', `同类的 ${MUTANT.hp} 倍`], ['攻击', `同类的 ${MUTANT.atk} 倍`], ['速度', `同类的 ${MUTANT.speed} 倍`]],
         '区域任务“击杀异变体”中出现的特殊丧尸，全身散发虹彩光芒，不会消失。可能是除苦力怕以外的任何一种丧尸。');
-      zombie('变', ELITE_CSS[2], '变异精英', ELITE_MUL.slice(1).map((v, i) => [['黄色', '橙色', '红色'][i], `生命、攻击 ×${v}`] as [string, string]),
+      zombie(enemyIcon('elite'), ELITE_CSS[2], '变异精英', ELITE_MUL.slice(1).map((v, i) => [['黄色', '橙色', '红色'][i], `生命、攻击 ×${v}`] as [string, string]),
         '脚下带有黄 / 橙 / 红色光环，更强也更值钱，偶尔会掉落子弹。');
-      zombie('王', '#ff4a3a', BOSS.name, [['生命', `每阶段 ${fmtNum(BOSS.hpPerPhase)}，共 ${BOSS.phases} 阶段`], ['攻击', String(BOSS.atk)]],
+      zombie(enemyIcon('laoda'), '#ff4a3a', BOSS.name, [['生命', `每阶段 ${fmtNum(BOSS.hpPerPhase)}，共 ${BOSS.phases} 阶段`], ['攻击', String(BOSS.atk)]],
         '尸王广场的主人：会蓄力冲刺、连续投掷石块，血量降低时召唤精英丧尸，半血后狂暴。冲刺撞墙会眩晕。');
-      zombie('曼', '#c06aff', MAMBA.name, [['生命', fmtNum(MAMBA.hp)], ['攻击', String(MAMBA.atk)]],
+      zombie(enemyIcon('mamba'), '#c06aff', MAMBA.name, [['生命', fmtNum(MAMBA.hp)], ['攻击', String(MAMBA.atk)]],
         '隐秘核心的主人：旋转激光、近身冲击波、大范围投石，狂暴后连续冲撞，并不断召唤精英丧尸。激光会被柱子挡住。');
-      zombie('箱', '#ffd24a', '奇物宝箱', [['生命', CHEST_HP.slice(2).map((v) => fmtNum(v)).join(' / ')]],
+      zombie(enemyIcon('chest'), '#ffd24a', '奇物宝箱', [['生命', CHEST_HP.slice(2).map((v) => fmtNum(v)).join(' / ')]],
         '完成区域任务后，下一个区域会出现奇物宝箱（生命值按第二 ~ 第五区递增）。它不会动也不会攻击，打破后掉落奇物。');
       body.appendChild(grid);
     } else if (tab === 'quest') {
@@ -538,10 +538,9 @@ export class Menus {
       const grid = h('div', { class: 'cx-grid' });
       const A = QUEST.arrow;
       const arrow: Record<string, string> = { signal: `${A.signal} 秒`, mutant: `${A.mutant} 秒`, cargo: `${A.cargo} 秒（运载点）`, pyre: '无', miasma: '无' };
-      const glyph: Record<string, string> = { signal: '信', pyre: '火', mutant: '异', cargo: '运', miasma: '瘴' };
       for (const id of QUEST_IDS) {
         const q = QUEST_INFO[id];
-        grid.appendChild(card(glyphIcon(glyph[id], q.color), h('b', { class: 'cx-t', style: `color:${q.color}` }, q.name),
+        grid.appendChild(card(questIcon(id), h('b', { class: 'cx-t', style: `color:${q.color}` }, q.name),
           h('div', { class: 'cx-row' }, stat('方向箭头', arrow[id])), h('div', { class: 'cx-eff' }, q.desc)));
       }
       body.append(grid, h('p', { style: 'color:#8d939a;margin:8px 0 0' }, `离开安全屋一段时间后，或者找到过目标之后，屏幕边缘会显示目标的方向。奇物宝箱在离开安全屋 ${A.chest} 秒后显示方向。`));

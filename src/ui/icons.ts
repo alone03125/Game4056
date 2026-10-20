@@ -3,13 +3,11 @@
 import { BULLETS, BulletId } from '../data/bullets';
 import { Gun } from '../data/guns';
 import { ItemId, ITEMS } from '../data/items';
-import { RelicId, RELICS } from '../data/relics';
 import { RARITY_CSS } from '../config';
-import { PIXEL_FONT } from './font';
 
 /** 第4.1次调整的逻辑模块图标符号 */
 const MODULE_SYM: Partial<Record<BulletId, string>> = {
-  mShine: '✦', mLoop: '∞', mShort: '½', mPre: '↺', mStrip: '✂', mSmelt: '⊕', mSplit2: '⇉', mCopy: '❐',
+  mShine: '✦', mLoop: '∞', mShort: '½', mPre: '↺', mStrip: '✂', mSplit2: '⇉', mCopy: '❐',
 };
 
 const cache = new Map<string, string>();
@@ -309,34 +307,11 @@ export function goldIcon(): string {
   return url;
 }
 
-/** 奇物增益图标（第4.1次调整）：深色底、彩色边框，中间一个字 */
-export function relicIcon(id: RelicId): string {
-  const d = RELICS[id];
-  return glyphIcon(d.glyph, d.color);
-}
-
-/** 带一个字的方形图标（奇物、图鉴里的敌人与任务） */
-export function glyphIcon(glyph: string, color: string): string {
-  const key = 'y' + glyph + color;
+/** 带缓存的图标（图鉴与奇物的图标见 art.ts） */
+export function cachedIcon(key: string, w: number, h: number, draw: (g: CanvasRenderingContext2D) => void): string {
   const c = cache.get(key);
   if (c) return c;
-  const url = mk(48, 48, (g) => {
-    g.fillStyle = '#14181c';
-    g.fillRect(2, 2, 44, 44);
-    g.strokeStyle = color;
-    g.lineWidth = 3;
-    g.strokeRect(3.5, 3.5, 41, 41);
-    const grd = g.createRadialGradient(24, 24, 2, 24, 24, 22);
-    grd.addColorStop(0, color + '55');
-    grd.addColorStop(1, color + '00');
-    g.fillStyle = grd;
-    g.fillRect(4, 4, 40, 40);
-    g.fillStyle = color;
-    g.font = `24px ${PIXEL_FONT}`;
-    g.textAlign = 'center';
-    g.textBaseline = 'middle';
-    g.fillText(glyph, 24, 26);
-  });
+  const url = mk(w, h, draw);
   cache.set(key, url);
   return url;
 }

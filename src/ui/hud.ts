@@ -1,6 +1,6 @@
 // 游戏内 HUD：生命/状态、区域与辐射、小地图、双枪面板、背包指示、快捷栏、提示、Boss 血条等。
 // 第4.1次调整：辐射计量条移到左上角与生命条放在一起，区域名称、计时、丧尸强化与区域任务放到右上角小地图下方，
-// 屏幕上方中间空出来；奇物增益以小图标显示在左上角；Boss 血条移到屏幕下方。
+// 屏幕上方中间空出来；奇物增益以小图标显示在左上角。第4.2次调整：Boss 血条仍在屏幕上方。
 
 import { ELITE_CSS, enhanceCoef, RARITY_CSS, RECOIL, ZONES } from '../config';
 import { BULLETS, bulletName, recoilOf } from '../data/bullets';
@@ -14,7 +14,8 @@ import { QUEST } from '../game/quest';
 import type { World } from '../game/world';
 import { fmtNum, fmtTime } from '../util/math';
 import { clear, h } from './dom';
-import { bulletIcon, itemIcon, relicIcon } from './icons';
+import { bulletIcon, itemIcon } from './icons';
+import { relicIcon } from './art';
 import { PIXEL_FONT } from './font';
 
 interface HandView { auto: boolean; cursor: number; reloading: boolean; prog: number }

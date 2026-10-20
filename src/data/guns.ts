@@ -6,7 +6,7 @@
 
 import { GUN_LIMITS } from '../config';
 import { Rng } from '../util/rng';
-import { Bullet, BULLETS, bulletCount, CastMods, IRI, nextUid, SHINY, smeltBullets } from './bullets';
+import { Bullet, BULLETS, bulletCount, CastMods, IRI, nextUid, SHINY } from './bullets';
 
 export const GUN_BUDGET_K = 1.75;
 export const GUN_ROLL: [number, number] = [0.7, 1.4];
@@ -256,7 +256,8 @@ export function gunStats(g: Gun, tempAtk = 0): GunStats {
     if (!raw) continue;
     loaded++;
     if (BULLETS[raw.def].logic?.short) shorts++;
-    // 复制模块：前面那发子弹对枪械数值的影响再生效一次
+    // 复制模块：前面那发子弹对枪械数值的影响再生效一次；复制模块自己的补正（-0.20x 攻击倍率）照常生效
+    if (BULLETS[raw.def].logic?.copy) atkAdd += BULLETS[raw.def].mods.atk ?? 0;
     const b = resolveSlot(g.bullets, i);
     if (!b) continue;
     const m = BULLETS[b.def].mods;
@@ -304,13 +305,13 @@ export interface CastShot {
 /**
  * 从 st.cursor 开始取出一次“施放”要射出的子弹：
  * 逻辑模块累积到下一发上；多重施放让接下来几发同时射出；复制模块视为前一发子弹；
- * 熔炼模块把再下一发子弹的数值叠加上来；循环模块登记下一发，之后每射出一发都带上它。
+ * 循环模块登记下一发，之后每射出一发都带上它。
  * resolve：发射时的变化（例如盲盒变成随机子弹），DPS 估算时不传。
  */
 export function castOnce(g: Gun, st: CastState, resolve?: (b: Bullet) => Bullet): CastShot[] {
   const L = g.bullets.length;
   const out: CastShot[] = [];
-  let toCast = 1, mods: CastMods = {}, smelt = 0, guard = 0;
+  let toCast = 1, mods: CastMods = {}, guard = 0;
   const next = (): number => { while (st.cursor < L && !g.bullets[st.cursor]) st.cursor++; return st.cursor; };
   while (toCast > 0 && guard++ < 48) {
     if (next() >= L) break;
@@ -329,21 +330,9 @@ export function castOnce(g: Gun, st: CastState, resolve?: (b: Bullet) => Bullet)
       if (lg.shine) mods.shine = true;
       if (lg.multi) mods.multi = (mods.multi ?? 1) * lg.multi;
       if (lg.loop) st.pendLoop++;
-      if (lg.smelt) smelt++;
       continue;
     }
     if (resolve) b = resolve(b);
-    // 熔炼：紧跟着的下一发（跳过空槽）是子弹时叠加上来，并且不再单独射出
-    while (smelt > 0) {
-      const j = next();
-      if (j >= L) break;
-      const b2raw = resolveSlot(g.bullets, j);
-      if (!b2raw || BULLETS[b2raw.def].logic) break;
-      st.cursor = j + 1;
-      b = smeltBullets(b, resolve ? resolve(b2raw) : b2raw);
-      smelt--;
-    }
-    smelt = 0;
     out.push({ b, mods, extra: st.loops.slice() });
     while (st.pendLoop > 0) { st.loops.push(b); st.pendLoop--; }
     mods = {};

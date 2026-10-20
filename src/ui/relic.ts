@@ -4,7 +4,7 @@
 import { RelicId, RELICS } from '../data/relics';
 import type { World } from '../game/world';
 import { clear, h } from './dom';
-import { relicIcon } from './icons';
+import { relicIcon } from './art';
 
 export class RelicView {
   root: HTMLDivElement;

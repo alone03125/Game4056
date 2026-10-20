@@ -1,6 +1,7 @@
 // 子弹（弹药模块）目录。子弹是人为设计的，生成实例时其基础数值（攻击/弹速/大小/额外散射/后坐系数）
 // 会各自随机进行 0.7~1.4 倍偏移。数值补正在装填进枪械时改变枪械本身的数据。
 // 第4.1次调整：子弹与模块共用一个随机池，按权重抽取（未特别说明的权重都是 10）。
+// 第4.2次调整：普通子弹的权重提高到 25，稀有子弹仍为 10，让子弹比模块更容易出现；删除熔炼模块。
 
 import { Rng } from '../util/rng';
 
@@ -13,7 +14,7 @@ export type BulletId =
   // 逻辑模块（不射出子弹，而是改变后续子弹的发射逻辑）
   | 'mDouble' | 'mTriple' | 'mHoming' | 'mPierce' | 'mBlast' | 'mPower' | 'mSpeed' | 'mFocus'
   // 第4.1次调整
-  | 'mShine' | 'mLoop' | 'mShort' | 'mPre' | 'mStrip' | 'mSmelt' | 'mSplit2' | 'mCopy';
+  | 'mShine' | 'mLoop' | 'mShort' | 'mPre' | 'mStrip' | 'mSplit2' | 'mCopy';
 
 /** 奇物射出的投射物（不是子弹，不进随机池；第4.1次调整） */
 export type SpecialId = 'xBow' | 'xKnife';
@@ -31,7 +32,6 @@ export interface LogicFx {
   shine?: boolean; // 下一发变为闪耀虹彩
   loop?: boolean; // 下一发在本轮之后每一发射出时都再射出一次
   short?: boolean; // 换弹时 90% 减半 / 10% 变为 4 倍
-  smelt?: boolean; // 下一发叠加再下一发的全部数值，并跳过再下一发
   multi?: number; // 下一发分裂成 N 倍
   copy?: boolean; // 视为上一发子弹
 }
@@ -98,34 +98,37 @@ export interface BulletDef {
   logic?: LogicFx;
 }
 
+/** 第4.2次调整：稀有子弹的刷新权重为 10，其余子弹为 25（模块为 10，闪耀虹彩与循环模块为 5） */
+export const RARE_BULLETS: BulletId[] = ['rocket', 'singular', 'mystery', 'sniper', 'gold', 'jet', 'leech'];
+
 export const BULLETS: Record<BulletId, BulletDef> = {
   std: {
     id: 'std', name: '标准弹', atk: 60, spd: 70, rng: 3, deg: 0, rc: 1.0, mods: {},
-    effect: '最基础的金属弹头，稳定可靠。', weight: 10, color: 0xffd27a, kind: 'bullet', sfx: 'pistol',
+    effect: '最基础的金属弹头，稳定可靠。', weight: 25, color: 0xffd27a, kind: 'bullet', sfx: 'pistol',
   },
   // 第4.1次调整：黄铜子弹、重型铅弹、追踪飞镖、喷射推进弹对枪械的负面影响减小
   brass: {
     id: 'brass', name: '穿透型黄铜子弹', atk: 45, spd: 85, rng: 2.5, deg: -2, rc: 0.8, mods: { delay: -0.01, spread: -3 },
-    effect: '本子弹可以穿透 3 个单位。', weight: 10, color: 0xffb84a, kind: 'bullet', sfx: 'pistol', pierce: 3,
+    effect: '本子弹可以穿透 3 个单位。', weight: 25, color: 0xffb84a, kind: 'bullet', sfx: 'pistol', pierce: 3,
   },
   lead: {
     id: 'lead', name: '重型铅弹', atk: 120, spd: 55, rng: 5, deg: 3, rc: 4.5, mods: { delay: 0.04, reload: 0.04 },
-    effect: '沉重的铅弹，击退命中的敌人，可以穿透 1 个单位。', weight: 10, color: 0xb0b8c8, kind: 'bullet', sfx: 'heavy',
+    effect: '沉重的铅弹，击退命中的敌人，可以穿透 1 个单位。', weight: 25, color: 0xb0b8c8, kind: 'bullet', sfx: 'heavy',
     pierce: 1, flags: { knock: 4 },
   },
   tri: {
     id: 'tri', name: '三发弹丸', atk: 24, spd: 90, rng: 4.5, deg: 75, rc: 3.3, mods: { delay: 0.03, reload: 0.07 },
-    effect: '一次可以射出 3 发子弹，子弹会射向不同的方向。本子弹可以穿透 1 个单位。', weight: 10, color: 0xffe08a,
+    effect: '一次可以射出 3 发子弹，子弹会射向不同的方向。本子弹可以穿透 1 个单位。', weight: 25, color: 0xffe08a,
     kind: 'bullet', sfx: 'shotgun', count: 3, pierce: 1,
   },
   buck: {
     id: 'buck', name: '鹿弹', atk: 20, spd: 75, rng: 3, deg: 40, rc: 2.5, mods: { delay: 0.06, reload: 0.12 },
-    effect: '一次射出 7 发弹丸，射程较短（13 米）。', weight: 10, color: 0xffc66a, kind: 'bullet', sfx: 'shotgun',
+    effect: '一次射出 7 发弹丸，射程较短（13 米）。', weight: 25, color: 0xffc66a, kind: 'bullet', sfx: 'shotgun',
     count: 7, range: 13,
   },
   bomb: {
     id: 'bomb', name: '炸弹', atk: 210, spd: 22, rng: 9, deg: -10, rc: 5, mods: { delay: 0.05, spread: -5 },
-    effect: '向前方抛出一枚炸弹，2.5 秒后爆炸，伤害范围内的所有单位。', weight: 10,
+    effect: '向前方抛出一枚炸弹，2.5 秒后爆炸，伤害范围内的所有单位。', weight: 25,
     color: 0xff6a3a, kind: 'bomb', sfx: 'thump',
   },
   rocket: {
@@ -135,57 +138,57 @@ export const BULLETS: Record<BulletId, BulletDef> = {
   },
   ricochet: {
     id: 'ricochet', name: '弹跳弹', atk: 48, spd: 65, rng: 3, deg: 0, rc: 1.0, mods: { delay: 0.01 },
-    effect: '遇到墙壁会反弹（最多 4 次），命中敌人后会弹向附近的另一个敌人（最多 2 次）。', weight: 10,
+    effect: '遇到墙壁会反弹（最多 4 次），命中敌人后会弹向附近的另一个敌人（最多 2 次）。', weight: 25,
     color: 0x8affc8, kind: 'bullet', sfx: 'pistol', flags: { wallBounce: 4, enemyBounce: 2 },
   },
   homing: {
     id: 'homing', name: '追踪飞镖', atk: 42, spd: 38, rng: 2.5, deg: 20, rc: 0.6, mods: { delay: -0.01, reload: -0.04 },
-    effect: '飞镖会自动追踪附近的敌人。', weight: 10, color: 0xff6ad8, kind: 'bullet', sfx: 'zap',
+    effect: '飞镖会自动追踪附近的敌人。', weight: 25, color: 0xff6ad8, kind: 'bullet', sfx: 'zap',
     range: 60, flags: { homing: true },
   },
   fire: {
     id: 'fire', name: '燃烧弹', atk: 33, spd: 60, rng: 3.5, deg: 5, rc: 1.2, mods: { reload: 0.04 },
-    effect: '点燃敌人：3 秒内每秒额外造成 40% 攻击力的伤害。燃烧中的敌人死亡时会引燃身边的同伴。', weight: 10,
+    effect: '点燃敌人：3 秒内每秒额外造成 40% 攻击力的伤害。燃烧中的敌人死亡时会引燃身边的同伴。', weight: 25,
     color: 0xff5a1a, kind: 'bullet', sfx: 'pistol', flags: { burn: true },
   },
   cryo: {
     id: 'cryo', name: '液氮弹', atk: 33, spd: 60, rng: 3.5, deg: 0, rc: 1.0, mods: { delay: 0.02 },
-    effect: '冻结敌人，使其移动速度降低 50%，持续 2.5 秒。可以穿透 1 个单位。', weight: 10, color: 0x7ad8ff,
+    effect: '冻结敌人，使其移动速度降低 50%，持续 2.5 秒。可以穿透 1 个单位。', weight: 25, color: 0x7ad8ff,
     kind: 'bullet', sfx: 'zap', pierce: 1, flags: { slow: true },
   },
   chain: {
     id: 'chain', name: '电弧弹', atk: 54, spd: 100, rng: 2, deg: 0, rc: 0.5, mods: { delay: 0.05 },
-    effect: '命中后释放电弧，在 7 米内跳跃 4 次，每次跳跃伤害为上一次的 80%。', weight: 10, color: 0x9ab8ff,
+    effect: '命中后释放电弧，在 7 米内跳跃 4 次，每次跳跃伤害为上一次的 80%。', weight: 25, color: 0x9ab8ff,
     kind: 'bullet', sfx: 'zap', flags: { chain: 4 },
   },
   split: {
     id: 'split', name: '分裂弹', atk: 62, spd: 60, rng: 4, deg: 0, rc: 1.5, mods: { delay: 0.05 },
-    effect: '飞行片刻或命中敌人后分裂为 6 枚碎片，每枚碎片造成 40% 攻击力的伤害。', weight: 10,
+    effect: '飞行片刻或命中敌人后分裂为 6 枚碎片，每枚碎片造成 40% 攻击力的伤害。', weight: 25,
     color: 0xd8ff6a, kind: 'split', sfx: 'pistol',
   },
   saw: {
     id: 'saw', name: '圆锯片', atk: 22, spd: 22, rng: 6, deg: 0, rc: 0.5, mods: { delay: 0.1 },
-    effect: '缓慢飞行的锯片，无限穿透，持续切割接触的敌人，遇墙反弹。', weight: 10,
+    effect: '缓慢飞行的锯片，无限穿透，持续切割接触的敌人，遇墙反弹。', weight: 25,
     color: 0xd0d6e0, kind: 'saw', sfx: 'saw', pierce: -1,
   },
   boomer: {
     id: 'boomer', name: '回旋镖', atk: 54, spd: 32, rng: 5, deg: 0, rc: 0.8, mods: { delay: 0.04 },
-    effect: '飞出后会返回你的身边，往返都能造成伤害，无限穿透。', weight: 10, color: 0xffa83a, kind: 'boomer',
+    effect: '飞出后会返回你的身边，往返都能造成伤害，无限穿透。', weight: 25, color: 0xffa83a, kind: 'boomer',
     sfx: 'saw', pierce: -1,
   },
   mine: {
     id: 'mine', name: '感应地雷', atk: 220, spd: 10, rng: 8, deg: 0, rc: 0.3, mods: { delay: 0.12 },
-    effect: '布置一枚地雷，敌人靠近时触发，片刻后爆炸。地雷最多存在 20 秒。', weight: 10, color: 0xff3a3a,
+    effect: '布置一枚地雷，敌人靠近时触发，片刻后爆炸。地雷最多存在 20 秒。', weight: 25, color: 0xff3a3a,
     kind: 'mine', sfx: 'thump',
   },
   toxic: {
     id: 'toxic', name: '毒雾弹', atk: 18, spd: 28, rng: 7, deg: 5, rc: 0.8, mods: { reload: 0.06 },
-    effect: '命中或飞行片刻后形成毒雾，4 秒内每秒对其中的敌人造成 3 倍攻击力的伤害。', weight: 10,
+    effect: '命中或飞行片刻后形成毒雾，4 秒内每秒对其中的敌人造成 3 倍攻击力的伤害。', weight: 25,
     color: 0x8aff3a, kind: 'toxic', sfx: 'thump',
   },
   light: {
     id: 'light', name: '轻量化弹头', atk: 22, spd: 95, rng: 2, deg: 4, rc: 0.4, mods: { delay: -0.06, reload: -0.12 },
-    effect: '牺牲威力换来更快的射速与换弹。', weight: 10, color: 0xfff2b0, kind: 'bullet', sfx: 'pistol',
+    effect: '牺牲威力换来更快的射速与换弹。', weight: 25, color: 0xfff2b0, kind: 'bullet', sfx: 'pistol',
   },
   sniper: {
     id: 'sniper', name: '钨芯穿甲弹', atk: 190, spd: 150, rng: 2.5, deg: -15, rc: 6, mods: { delay: 0.18, reload: 0.15 },
@@ -194,12 +197,12 @@ export const BULLETS: Record<BulletId, BulletDef> = {
   },
   nova: {
     id: 'nova', name: '环形弹幕', atk: 24, spd: 45, rng: 3, deg: 0, rc: 0, mods: { delay: 0.08 },
-    effect: '向四周 360° 射出 12 发子弹，射程 14 米。', weight: 10, color: 0xc08aff, kind: 'bullet', sfx: 'zap',
+    effect: '向四周 360° 射出 12 发子弹，射程 14 米。', weight: 25, color: 0xc08aff, kind: 'bullet', sfx: 'zap',
     count: 12, range: 14, flags: { ring: true },
   },
   beam: {
     id: 'beam', name: '等离子射线', atk: 23, spd: 160, rng: 2, deg: -5, rc: 0.2, mods: { delay: -0.03 },
-    effect: '高速等离子束，无限穿透，射程 15 米。', weight: 10, color: 0x5affff, kind: 'bullet', sfx: 'laser',
+    effect: '高速等离子束，无限穿透，射程 15 米。', weight: 25, color: 0x5affff, kind: 'bullet', sfx: 'laser',
     pierce: -1, range: 15, flags: { beam: true },
   },
   // 第4.1次调整：奇点弹的伤害与范围略微降低（攻击 15 → 13，大小 8 → 7，坍缩 10 倍 → 9 倍）
@@ -225,14 +228,14 @@ export const BULLETS: Record<BulletId, BulletDef> = {
   },
   // —— 第4次调整 ——
   mystery: {
-    id: 'mystery', name: '盲盒', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: { delay: -0.04, atk: 0.2 },
+    id: 'mystery', name: '盲盒', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: { delay: 0.12 },
     effect: '发射时随机变成其他任意一种子弹，数值也会随机浮动。', weight: 10, color: 0xff7ad8, kind: 'bullet', sfx: 'pistol',
     flags: { mystery: true },
   },
   corn: {
     id: 'corn', name: '玉米粒', atk: 22, spd: 90, rng: 1.5, deg: 5, rc: 1.8, mods: { delay: 0.05, reload: -0.07 },
     effect: '发射一颗轻量小型的子弹，但有 12% 的概率变为黄油：黄油的攻击力为玉米粒的 7 倍，命中时让附近小范围的敌人晕眩 6 秒。',
-    weight: 10, color: 0xffd84a, kind: 'bullet', sfx: 'pistol', flags: { butter: 0.12 },
+    weight: 25, color: 0xffd84a, kind: 'bullet', sfx: 'pistol', flags: { butter: 0.12 },
   },
   // —— 逻辑模块 ——
   mDouble: {
@@ -267,17 +270,17 @@ export const BULLETS: Record<BulletId, BulletDef> = {
     id: 'mFocus', name: '聚焦模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: {},
     effect: '逻辑模块：下一发子弹的散射角度 -60°。', weight: 10, color: 0xd8d8ff, kind: 'bullet', sfx: 'pistol', logic: { focus: 60 },
   },
-  // —— 第4.1次调整 ——
+  // —— 第4.1次调整（第4.2次调整：除预行程模块外都附带 -0.20x 攻击倍率） ——
   mShine: {
-    id: 'mShine', name: '闪耀虹彩模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: { delay: 0.05 },
+    id: 'mShine', name: '闪耀虹彩模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: { delay: 0.05, atk: -0.2 },
     effect: '逻辑模块：下一发子弹在发射时变为闪耀虹彩子弹。', weight: 5, color: 0xffa8ff, kind: 'bullet', sfx: 'pistol', logic: { shine: true },
   },
   mLoop: {
-    id: 'mLoop', name: '循环模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: { delay: 0.15, reload: 0.27 },
+    id: 'mLoop', name: '循环模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: { delay: 0.15, reload: 0.27, atk: -0.2 },
     effect: '逻辑模块：下一发子弹射出后，这一轮里之后每射出一发子弹，都会把它再一同射出一次。', weight: 5, color: 0x6affd0, kind: 'bullet', sfx: 'pistol', logic: { loop: true },
   },
   mShort: {
-    id: 'mShort', name: '短行程模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: {},
+    id: 'mShort', name: '短行程模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: { atk: -0.2 },
     effect: '逻辑模块：每次换弹时，有 90% 的概率让换弹时间减半，但也有 10% 的概率让换弹时间变为 4 倍。', weight: 10, color: 0xb8ff6a, kind: 'bullet', sfx: 'pistol', logic: { short: true },
   },
   mPre: {
@@ -285,19 +288,15 @@ export const BULLETS: Record<BulletId, BulletDef> = {
     effect: '逻辑模块：换弹时间缩短 30%，但攻击倍率 -0.20x。', weight: 10, color: 0x6ac8a0, kind: 'bullet', sfx: 'pistol', logic: {},
   },
   mStrip: {
-    id: 'mStrip', name: '拆卸模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: { delay: -0.25, half: true },
+    id: 'mStrip', name: '拆卸模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: { delay: -0.25, half: true, atk: -0.2 },
     effect: '逻辑模块：射击延迟 -0.25s，但载弹量变为原来的一半（最少 1）。枪里已经装了超过一半载弹量的子弹时无法装入。', weight: 10, color: 0xc8a06a, kind: 'bullet', sfx: 'pistol', logic: {},
   },
-  mSmelt: {
-    id: 'mSmelt', name: '熔炼模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: { reload: 0.33 },
-    effect: '逻辑模块：把紧跟在后面的第二发子弹的全部数值叠加到第一发上，第二发不再单独射出。', weight: 5, color: 0xff8a2a, kind: 'bullet', sfx: 'pistol', logic: { smelt: true },
-  },
   mSplit2: {
-    id: 'mSplit2', name: '二重分裂模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: { delay: 0.08 },
+    id: 'mSplit2', name: '二重分裂模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: { delay: 0.08, atk: -0.2 },
     effect: '逻辑模块：下一发子弹在发射时分裂成 2 倍，一并射出。', weight: 10, color: 0xffd86a, kind: 'bullet', sfx: 'pistol', logic: { multi: 2 },
   },
   mCopy: {
-    id: 'mCopy', name: '复制模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: {},
+    id: 'mCopy', name: '复制模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: { atk: -0.2 },
     effect: '逻辑模块：自身视为排在它前面的那一发子弹，那发子弹对枪械数值的影响也会再生效一次。', weight: 10, color: 0xe0e0e0, kind: 'bullet', sfx: 'pistol', logic: { copy: true },
   },
 };
@@ -370,14 +369,6 @@ export function makeBullet(def: BulletId, rng: Rng, fixedRoll?: number): Bullet 
   if (shiny) b.shiny = true;
   if (iri) b.iri = true;
   return b;
-}
-
-/** 熔炼模块：a 的各项数值线性叠加上 b 的数值（类型与效果沿用 a，第4.1次调整） */
-export function smeltBullets(a: Bullet, b: Bullet): Bullet {
-  const out: Bullet = { ...a, atk: a.atk + b.atk, spd: a.spd + b.spd, rng: a.rng + b.rng, deg: a.deg + b.deg, rc: a.rc + b.rc };
-  if (b.shiny) out.shiny = true;
-  if (b.iri) out.iri = true;
-  return out;
 }
 
 /** 子弹的显示名（带闪耀 / 虹彩前缀） */

@@ -85,7 +85,7 @@ button { font-family: var(--font); }
 .quest .qw { color: var(--dim); }
 .quest .qc { color: #ffd24a; margin-top: 3px; }
 .relic-row { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
-.relic-row img { width: 24px; height: 24px; pointer-events: auto; image-rendering: pixelated; }
+.relic-row img { width: 24px; height: 24px; pointer-events: auto; image-rendering: auto; }
 
 .hud-bl { position: absolute; left: 16px; bottom: 16px; display: flex; gap: 10px; align-items: flex-end; }
 .gun-card { width: 290px; padding: 9px 11px 10px; border-left: 3px solid #888; }
@@ -131,7 +131,8 @@ button { font-family: var(--font); }
 .banner.show { animation: bannerAnim 3.2s forwards; }
 @keyframes bannerAnim { 0% { opacity: 0; transform: scale(1.15); letter-spacing: 20px; } 12% { opacity: 1; transform: scale(1); } 80% { opacity: 1; } 100% { opacity: 0; } }
 
-.boss-bar { position: absolute; left: 50%; bottom: 186px; transform: translateX(-50%); width: 560px; text-align: center; }
+/* 第4.2次调整：Boss 血条回到屏幕上方（中间只有它，不再有区域面板） */
+.boss-bar { position: absolute; left: 50%; top: 14px; transform: translateX(-50%); width: 560px; text-align: center; }
 .boss-bar .bn { font-weight: 900; font-size: 12px; letter-spacing: 3px; color: #ff6a5a; text-shadow: 0 2px 6px #000; }
 .boss-bar .bb { height: 14px; margin-top: 4px; background: rgba(0,0,0,0.7); border: 1px solid #ff6a5a; position: relative; }
 .boss-bar .bf { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(180deg, #ff4a3a, #a01a10); transition: width .15s; }
@@ -210,7 +211,7 @@ button { font-family: var(--font); }
 .relic-cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .relic-card { border: 1px solid var(--line2); background: rgba(255,255,255,0.03); padding: 14px 12px; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 8px; transition: transform .1s, border-color .1s, background .1s; }
 .relic-card:hover { transform: translateY(-3px); background: rgba(255,210,74,0.08); }
-.relic-card img { width: 48px; height: 48px; image-rendering: pixelated; }
+.relic-card img { width: 48px; height: 48px; image-rendering: auto; }
 .relic-card h4 { margin: 0; font-size: 24px; letter-spacing: 2px; }
 .relic-card p { margin: 0; font-size: 12px; line-height: 1.6; color: #d0ccc4; text-align: left; }
 .relic-card .key { font-size: 12px; color: var(--dim); }

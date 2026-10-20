@@ -1,10 +1,11 @@
 // 规则测试：第3次调整（枪械修饰语、参数硬下限、道具前缀、Rarity5、金币公式）与第4次调整（盲盒、玉米粒、苦力怕、奇点吸引投掷物、安全屋试枪、拉起无敌），
-// 以及第4.1次调整（权重、新模块、全局强化零件1型、招财弹、临时整备区、区域任务、奇物宝箱与奇物、联机本地判定碰撞伤害）。
+// 以及第4.1次调整（权重、新模块、全局强化零件1型、招财弹、临时整备区、区域任务、奇物宝箱与奇物、联机本地判定碰撞伤害）；
+// 第4.2次调整更新了权重、盲盒、模块的攻击倍率与瘴气的完成比例，删除了熔炼模块。
 // 用法：npx esbuild tools/modtest.ts --bundle --platform=node --outfile=tools/.modtest.cjs && node tools/.modtest.cjs
 import { RunState } from '../src/game/state';
 import { World } from '../src/game/world';
 import { nullFx } from '../src/game/fx';
-import { BULLETS, BULLET_IDS, BulletId, makeBullet } from '../src/data/bullets';
+import { BULLETS, BULLET_IDS, BulletId, makeBullet, RARE_BULLETS } from '../src/data/bullets';
 import { GUN_MODS, gunStats, makeFixedGun, makeGun, rollRarity } from '../src/data/guns';
 import { altarBuy, altarValue, buyBullet, buyGun } from '../src/game/shop';
 import { bulletToSlot, moveItem } from '../src/game/inventory';
@@ -146,7 +147,7 @@ const fireOnce = (w: World, defs: string[], hand = 0) => {
   w.input.fire = [false, false];
   return g;
 };
-// 9. 盲盒：发射时变成别的子弹；装填后攻击倍率 +0.20、射击延迟 -0.04
+// 9. 盲盒：发射时变成别的子弹；装填后射击延迟 +0.12（第4.2次调整）
 {
   const kinds = new Set<string>();
   for (let k = 0; k < 40; k++) {
@@ -160,8 +161,8 @@ const fireOnce = (w: World, defs: string[], hand = 0) => {
   const base = gunStats(g);
   g.bullets = [makeBullet('mystery', rng, 1), null];
   const st = gunStats(g);
-  check('盲盒：攻击倍率 +0.20', Math.abs(st.atk - base.atk - 0.2) < 1e-9, `${base.atk} → ${st.atk}`);
-  check('盲盒：射击延迟 -0.04', Math.abs(st.delay - (g.delay - 0.04)) < 1e-9, `${g.delay} → ${st.delay}`);
+  check('盲盒：不改变攻击倍率', Math.abs(st.atk - base.atk) < 1e-9, `${base.atk} → ${st.atk}`);
+  check('盲盒：射击延迟 +0.12', Math.abs(st.delay - (g.delay + 0.12)) < 1e-9, `${g.delay} → ${st.delay}`);
   check('盲盒不会是闪耀 / 虹彩', !makeBullet('mystery', new Rng(5)).shiny);
 }
 // 10. 玉米粒：约 12% 变成黄油（攻击 ×7），黄油让附近的丧尸晕眩 6 秒，Boss 免疫
@@ -297,12 +298,14 @@ const fireMag = (w: World, g: ReturnType<typeof freshGun>) => {
   w.input.fire = [false, false];
   return { shots: w.run.stats.shotsFired - shots0, projs };
 };
-// 14. 权重：已有的子弹与模块都是 10，闪耀虹彩 / 循环 / 熔炼模块是 5
+// 14. 权重（第4.2次调整）：普通子弹 25、稀有子弹 10，模块 10（闪耀虹彩 / 循环模块 5）；熔炼模块已删除
 {
-  const old = BULLET_IDS.filter((id) => !['mShine', 'mLoop', 'mSmelt'].includes(id));
-  check('已有子弹与未特别说明的模块权重为 10', old.every((id) => BULLETS[id].weight === 10));
-  check('闪耀虹彩 / 循环 / 熔炼模块权重为 5', ['mShine', 'mLoop', 'mSmelt'].every((id) => BULLETS[id as BulletId].weight === 5));
-  check('新增 8 种逻辑模块', ['mShine', 'mLoop', 'mShort', 'mPre', 'mStrip', 'mSmelt', 'mSplit2', 'mCopy'].every((id) => BULLET_IDS.includes(id as BulletId) && BULLETS[id as BulletId].logic));
+  const bullets = BULLET_IDS.filter((id) => !BULLETS[id].logic);
+  const mods = BULLET_IDS.filter((id) => BULLETS[id].logic);
+  check('普通子弹权重 25、稀有子弹 10', bullets.every((id) => BULLETS[id].weight === (RARE_BULLETS.includes(id) ? 10 : 25)));
+  check('模块权重 10，闪耀虹彩 / 循环模块 5', mods.every((id) => BULLETS[id].weight === (id === 'mShine' || id === 'mLoop' ? 5 : 10)));
+  check('第4.1次调整的 7 种逻辑模块（熔炼模块已删除）', ['mShine', 'mLoop', 'mShort', 'mPre', 'mStrip', 'mSplit2', 'mCopy'].every((id) => BULLET_IDS.includes(id as BulletId) && BULLETS[id as BulletId].logic) && !BULLET_IDS.includes('mSmelt' as BulletId));
+  check('六种模块附带 -0.20x 攻击倍率', ['mShine', 'mLoop', 'mShort', 'mStrip', 'mSplit2', 'mCopy'].every((id) => BULLETS[id as BulletId].mods.atk === -0.2));
 }
 // 15. 全局强化零件1型：对之后拿到的枪也生效，最多 +1.60x
 {
@@ -322,17 +325,15 @@ const fireMag = (w: World, g: ReturnType<typeof freshGun>) => {
   (w as any).__god = true;
   const loop = fireMag(w, freshGun(['mLoop', 'std', 'brass', 'light']));
   check('循环模块：A、B+A、C+A 共射出 5 发', loop.shots === 5, String(loop.shots));
-  const smelt = fireMag(w, freshGun(['mSmelt', 'std', 'lead']));
-  check('熔炼模块：两发合成一发', smelt.shots === 1, String(smelt.shots));
-  check('熔炼模块：攻击力相加', smelt.projs.length > 0 && Math.abs(smelt.projs[0].dmg - (60 + 120)) < 0.5, smelt.projs[0]?.dmg?.toFixed(1));
   const copy = fireMag(w, freshGun(['std', 'mCopy']));
   check('复制模块：视为上一发子弹', copy.shots === 2 && copy.projs.every((p) => p.id === 'std'), `${copy.shots}`);
   const st = gunStats(freshGun(['light', 'mCopy']));
   check('复制模块：枪械数值影响再生效一次', Math.abs(st.delay - Math.max(0.05, 0.3 - 0.12)) < 1e-9, st.delay.toFixed(2));
+  check('复制模块：自身的 -0.20x 攻击倍率照常生效', Math.abs(st.atk - 0.8) < 1e-9, st.atk.toFixed(2));
   const split = fireMag(w, freshGun(['mSplit2', 'std']));
   check('二重分裂模块：射出 2 枚', split.projs.length === 2, String(split.projs.length));
   const shine = fireMag(w, freshGun(['mShine', 'std']));
-  check('闪耀虹彩模块：伤害 ×1.25×1.6、带特效', shine.projs.length === 1 && Math.abs(shine.projs[0].dmg - 60 * 1.25 * 1.6) < 0.5 && shine.projs[0].fancy === 3, shine.projs[0]?.dmg?.toFixed(1));
+  check('闪耀虹彩模块：伤害 ×1.25×1.6（攻击倍率 -0.20x）、带特效', shine.projs.length === 1 && Math.abs(shine.projs[0].dmg - 60 * 1.25 * 1.6 * 0.8) < 0.5 && shine.projs[0].fancy === 3, shine.projs[0]?.dmg?.toFixed(1));
   const g = freshGun(['mPre', 'std']);
   const pre = gunStats(g);
   check('预行程模块：换弹 -30%、攻击倍率 -0.20x', Math.abs(pre.reload - Math.max(0.25, g.reload * 0.7)) < 1e-9 && Math.abs(pre.atk - 0.8) < 1e-9, `${g.reload} → ${pre.reload}`);
@@ -479,9 +480,12 @@ const tick = (w: World, sec: number, each?: () => void) => { for (let i = 0; i <
   tick(w, 3, () => w.enemies.clearAll());
   w.input.moveY = 0;
   check('清除瘴气：走过的道路被净化', q.mz!.clean > c0 + 30, String(q.mz!.clean - c0));
-  q.mz!.clean = Math.ceil(q.mz!.total * 0.34);
+  q.mz!.clean = Math.ceil(q.mz!.total * 0.49);
   tick(w, 0.1, () => w.enemies.clearAll());
-  check('清除瘴气：单人净化 33% 后完成', q.done);
+  check('清除瘴气：单人 49% 时还没完成', !q.done);
+  q.mz!.clean = Math.ceil(q.mz!.total * 0.51);
+  tick(w, 0.1, () => w.enemies.clearAll());
+  check('清除瘴气：单人净化 50% 后完成', q.done);
 }
 {
   const w = questWorld('mutant');

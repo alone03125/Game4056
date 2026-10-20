@@ -5,8 +5,11 @@
 // - 联机时任务进度由房主结算并同步（随流程信息每 0.1 秒发送一次）：
 //   非房主点燃火堆、踢动物资球时先在本地生效，再交给房主；净化瘴气每个人都在本地按所有玩家的位置计算，
 //   是否完成以房主为准。
+// 第4.2次调整：信号区域扩大 1 倍；瘴气改为单人 50% / 多人 80%；多人时要点燃全部火堆；区域报幕结束后再报幕一次任务；
+// 击杀异变体的进度条实时显示异变体已损失的生命。
 
 import { CHEST_HP, ENEMY_TYPES, EnemyType } from '../config';
+import { fmtNum } from '../util/math';
 import { globalRng, Rng } from '../util/rng';
 import { NavGrid } from '../world/navgrid';
 import { Obstacle, ZoneLayout } from '../world/zone';
@@ -18,29 +21,30 @@ export const QUEST_IDS: QuestId[] = ['signal', 'pyre', 'mutant', 'cargo', 'miasm
 
 /** 任务数值（未在调整文档中规定的为自定） */
 export const QUEST = {
-  signalR: 5.5, // 信号区域半径（自定）；接近完成时缩小到 2/3
+  signalR: 11, // 信号区域半径（第4.2次调整：5.5 → 11）；接近完成时缩小到 2/3
   signalTime: 20, // 单人需要停留的秒数，2 人及以上 ×2
   signalDecay: 0.75, // 区域里没人时进度回退的速度
   pyres: 7,
-  pyreNeed: 6,
+  pyreNeed: 6, // 单人；2 人及以上需要点燃全部（第4.2次调整）
   pyreHalf: 0.75, // 可燃物堆的半边长（自定）
   pyreH: 1.3,
   balls: 3,
   ballR: 0.85, // 物资球半径（自定）
   dropR: 3.4, // 运载点半径（自定）
   miasmaR: 4.2, // 净化半径：约为主要道路宽度（7 米）的一半多
-  miasmaNeed: [0.33, 0.67], // 单人 / 2 人及以上
+  miasmaNeed: [0.5, 0.8], // 单人 / 2 人及以上（第4.2次调整：33% / 67% → 50% / 80%）
   /** 离开安全屋多少秒后显示目标的方向箭头（找到之后也会显示） */
   arrow: { signal: 45, mutant: 45, cargo: 30, chest: 75 },
   foundDist: 18, // 走到这么近算“找到”（自定）
+  bannerDelay: 3.3, // 区域报幕（3.2 秒）结束后再报幕任务
 };
 
 export const QUEST_INFO: Record<QuestId, { name: string; desc: string; color: string }> = {
   signal: { name: '发送信号', color: '#4affe0', desc: '在信号区域里停留，直到信号发送完毕。几个人一起站在里面进度更快；区域里没人时进度会慢慢回退。' },
-  pyre: { name: '点燃火堆', color: '#ff8a2a', desc: '区域里散落着 7 个插着红旗的可燃物堆，用子弹或爆炸点燃其中 6 个。' },
+  pyre: { name: '点燃火堆', color: '#ff8a2a', desc: '区域里散落着 7 个插着红旗的可燃物堆，用子弹或爆炸点燃其中 6 个；2 人及以上需要全部点燃。' },
   mutant: { name: '击杀异变体', color: '#ff7aff', desc: '区域里出现了一只带有虹彩光芒的异变体：生命值是同类的 24 倍，攻击力是 4 倍，移动较慢，而且不会消失。找到并击杀它。' },
   cargo: { name: '运送物资', color: '#ffd24a', desc: '区域里有 3 个物资球，碰到物资球就能推着它走，撞到墙会反弹。把任意 1 个推进运载点即可完成。' },
-  miasma: { name: '清除瘴气', color: '#7aff5a', desc: '主要道路被深绿色的瘴气污染了。走过道路就能净化身边的地面，净化 33% 的道路（2 人及以上为 67%）即可完成。' },
+  miasma: { name: '清除瘴气', color: '#7aff5a', desc: '主要道路被深绿色的瘴气污染了。走过道路就能净化身边的地面，净化 50% 的道路（2 人及以上为 80%）即可完成。' },
 };
 
 /** 本局 4 个区域的任务：由种子决定，所有玩家一致 */
@@ -86,6 +90,8 @@ export class Quests {
   found = { signal: false, mutant: false, cargo: false, chest: false };
   /** 联机：房主同步的瘴气净化进度（非房主显示用） */
   private netClean = -1;
+  /** 任务报幕倒计时（区域报幕结束后） */
+  private bannerT = -1;
 
   constructor(private w: World, seed: number) {
     this.order = questOrder(seed);
@@ -111,7 +117,12 @@ export class Quests {
     nav.computeFlow(seedPt.x, seedPt.y);
     switch (this.id) {
       case 'signal': {
-        const s = this.pickSpot(L, nav, rng, { clear: QUEST.signalR, minStart: 34, avoid: [], best: true });
+        // 圈很大，街区里很难找到完全空旷的地方：依次放宽空旷程度的要求
+        let s: Spot | null = null;
+        for (const minFree of [0.8, 0.65, 0.5, 0]) {
+          s = this.pickSpot(L, nav, rng, { clear: QUEST.signalR, minStart: 34, avoid: [], best: true, minFree });
+          if (s) break;
+        }
         if (s) { this.sig.x = s.x; this.sig.y = s.y; }
         this.sig.r = QUEST.signalR;
         break;
@@ -159,6 +170,8 @@ export class Quests {
     for (let i = 0; i < 900; i++) {
       const x = rng.range(r.x0 + o.clear + 1, r.x1 - o.clear - 1), y = rng.range(r.y0 + o.clear + 1, r.y1 - o.clear - 1);
       if (!nav.reachable(x, y)) continue;
+      // 中心附近一定是空地（放宽空旷程度的要求时也不会贴着障碍物）
+      if (!nav.isFree(x + 1, y) || !nav.isFree(x - 1, y) || !nav.isFree(x, y + 1) || !nav.isFree(x, y - 1)) continue;
       if (Math.hypot(x - st.x, y - st.y) < o.minStart) continue;
       if (L.safeRoom && x > L.safeRoom.rect.x0 - 6 && x < L.safeRoom.rect.x1 + 6 && y > L.safeRoom.rect.y0 - 8) continue;
       if (o.avoid.some((a) => Math.hypot(a.x - x, a.y - y) < a.d)) continue;
@@ -175,10 +188,8 @@ export class Quests {
   /** 离开安全屋（第一区为开局）：发布任务；房主生成异变体与奇物宝箱 */
   begin(): void {
     const w = this.w;
-    if (this.id) {
-      const q = QUEST_INFO[this.id];
-      w.fx.toast(`区域任务：${q.name}`, q.color);
-    }
+    // 区域报幕结束后，再报幕一次区域任务（见 update）
+    this.bannerT = this.id ? QUEST.bannerDelay : -1;
     if (this.chestZone) w.fx.toast(this.zone >= 5 ? '尸王广场里出现了奇物宝箱' : '这个区域里出现了奇物宝箱', '#ffd24a');
     if (!w.isAuthority) return;
     const L = w.layout;
@@ -235,6 +246,23 @@ export class Quests {
     return QUEST.miasmaNeed[this.players() >= 2 ? 1 : 0];
   }
 
+  /** 需要点燃的火堆数：单人 6 个，2 人及以上全部 */
+  pyreNeed(): number {
+    return this.players() >= 2 ? this.pyres.length : Math.min(QUEST.pyreNeed, this.pyres.length);
+  }
+
+  /** 任务报幕的副标题 */
+  brief(): string {
+    switch (this.id) {
+      case 'signal': return `在信号区域里停留 ${this.signalNeed()} 秒`;
+      case 'pyre': return `用子弹点燃 ${this.pyreNeed()} 个可燃物堆`;
+      case 'mutant': return '找到并击杀带有虹彩光芒的异变体';
+      case 'cargo': return '把任意 1 个物资球推进运载点';
+      case 'miasma': return `净化 ${Math.round(this.miasmaNeed() * 100)}% 被瘴气污染的道路`;
+      default: return '';
+    }
+  }
+
   private players(): number {
     return this.w.net ? this.w.net.aliveCount() : 1;
   }
@@ -259,8 +287,14 @@ export class Quests {
     let text = '', frac = 0;
     switch (this.id) {
       case 'signal': { const need = this.signalNeed(); frac = this.progress / need; text = `信号 ${Math.floor(Math.min(need, this.progress))} / ${need} 秒`; break; }
-      case 'pyre': frac = this.litCount() / QUEST.pyreNeed; text = `已点燃 ${this.litCount()} / ${QUEST.pyreNeed}`; break;
-      case 'mutant': frac = this.done ? 1 : 0; text = this.done ? '异变体已被击杀' : (this.mutant() ? '异变体还活着' : '寻找异变体'); break;
+      case 'pyre': frac = this.litCount() / this.pyreNeed(); text = `已点燃 ${this.litCount()} / ${this.pyreNeed()}`; break;
+      case 'mutant': {
+        // 第4.2次调整：进度条实时显示异变体已损失的生命
+        const m = this.mutant();
+        if (m) { frac = 1 - Math.max(0, m.hp) / Math.max(1, m.maxHp); text = `异变体生命 ${fmtNum(Math.max(0, Math.ceil(m.hp)))} / ${fmtNum(Math.round(m.maxHp))}`; }
+        else { frac = this.done ? 1 : 0; text = this.done ? '异变体已被击杀' : '寻找异变体'; }
+        break;
+      }
       case 'cargo': frac = this.done ? 1 : 0; text = this.done ? '物资已送达' : '把物资球推进运载点'; break;
       case 'miasma': { const need = this.miasmaNeed(); frac = this.miasmaFrac() / need; text = `已净化 ${Math.floor(this.miasmaFrac() * 100)}% / ${Math.round(need * 100)}%`; break; }
     }
@@ -290,6 +324,14 @@ export class Quests {
   update(dt: number): void {
     const w = this.w;
     if (!w.zoneStarted || !w.phaseActive()) return;
+    if (this.bannerT > 0) {
+      this.bannerT -= dt;
+      if (this.bannerT <= 0 && this.id) {
+        const q = QUEST_INFO[this.id];
+        w.fx.banner(`区域任务：${q.name}`, this.brief(), q.color);
+        w.fx.sound('beep');
+      }
+    }
     const v = w.view;
     const near = (x: number, y: number, r = QUEST.foundDist) => Math.hypot(x - v.x, y - v.y) < r;
     if (this.id === 'signal' && !this.found.signal && near(this.sig.x, this.sig.y, QUEST.foundDist + this.sig.r)) this.found.signal = true;
@@ -319,7 +361,7 @@ export class Quests {
         if (this.progress >= need) this.complete();
         break;
       }
-      case 'pyre': if (this.litCount() >= QUEST.pyreNeed) this.complete(); break;
+      case 'pyre': if (this.litCount() >= this.pyreNeed()) this.complete(); break;
       case 'miasma': if (this.miasmaFrac() >= this.miasmaNeed()) this.complete(); break;
     }
   }
@@ -364,7 +406,7 @@ export class Quests {
     w.fx.sound('explosion', p.x, p.y, 0.4);
     w.fx.sparks(p.x, p.y, 0xff8a2a, 16, 5);
     if (local && w.net && !w.isAuthority) { w.net.questIgnite(i); return; }
-    w.fxAll('toast', `点燃了可燃物堆（${this.litCount()} / ${QUEST.pyreNeed}）`, '#ff8a2a');
+    w.fxAll('toast', `点燃了可燃物堆（${this.litCount()} / ${this.pyreNeed()}）`, '#ff8a2a');
   }
 
   // —— 运送物资 ——
