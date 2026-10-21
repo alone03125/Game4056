@@ -300,6 +300,40 @@ export class AudioEngine {
       case 'death': [330, 294, 247, 196, 147].forEach((f, i) => this.tone(o, t + i * 0.18, 0.5, 0.3, 'triangle', f, f * 0.98)); break;
       case 'click': this.tone(o, t, 0.04, 0.18, 'square', 1200, 900); break;
       case 'hover': this.tone(o, t, 0.025, 0.06, 'sine', 1800, 1800); break;
+      // —— 第4.3次调整 ——
+      case 'heartbeat':
+        // 过场动画的心跳：两下低沉的重击
+        this.tone(o, t, 0.24, 1.0, 'sine', 62, 34);
+        this.noise(o, t, 0.12, 0.5, 'lowpass', 260, 60, 1);
+        this.tone(o, t + 0.21, 0.22, 0.75, 'sine', 56, 32);
+        this.noise(o, t + 0.21, 0.1, 0.35, 'lowpass', 220, 60, 1);
+        break;
+      case 'rageRoar':
+        // 狂暴的怒吼：比普通的吼叫更长、更低、更宽
+        this.noise(o, t, 2.4, 1.0, 'bandpass', 340, 90, 1.2);
+        this.noise(o, t, 1.2, 0.6, 'lowpass', 1800, 80, 0.7);
+        this.tone(o, t, 2.2, 0.55, 'sawtooth', 74, 36, 0.12);
+        this.tone(o, t, 2.2, 0.4, 'sawtooth', 78, 38, 0.12);
+        this.tone(o, t, 2.0, 0.22, 'square', 148, 62, 0.2);
+        this.tone(o, t, 2.4, 0.7, 'sine', 46, 24, 0.08);
+        break;
+      case 'qteAlert':
+        // 技巧检定的提示音：清脆的“叮”（提醒玩家注意）
+        this.tone(o, t, 0.5, 0.32, 'sine', 1568, 1568);
+        this.tone(o, t, 0.35, 0.14, 'sine', 3136, 3136);
+        this.tone(o, t + 0.09, 0.55, 0.3, 'sine', 2093, 2093);
+        this.tone(o, t + 0.09, 0.3, 0.08, 'triangle', 4186, 4186);
+        break;
+      case 'qteGreat':
+        [1318, 1760, 2637].forEach((fq, i) => this.tone(o, t + i * 0.05, 0.3, 0.26, 'triangle', fq, fq));
+        this.noise(o, t + 0.05, 0.35, 0.18, 'highpass', 6000, 9000, 0.5);
+        break;
+      case 'qteGood': this.tone(o, t, 0.12, 0.26, 'square', 880, 880); this.tone(o, t + 0.06, 0.16, 0.2, 'triangle', 1320, 1320); break;
+      case 'qteMiss':
+        this.tone(o, t, 0.34, 0.32, 'sawtooth', 220, 92);
+        this.tone(o, t, 0.34, 0.2, 'square', 233, 98);
+        this.noise(o, t, 0.2, 0.3, 'lowpass', 900, 200, 1);
+        break;
     }
   }
 

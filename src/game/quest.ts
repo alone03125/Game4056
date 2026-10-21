@@ -31,7 +31,7 @@ export const QUEST = {
   balls: 3,
   ballR: 0.85, // 物资球半径（自定）
   dropR: 3.4, // 运载点半径（自定）
-  miasmaR: 4.2, // 净化半径：约为主要道路宽度（7 米）的一半多
+  miasmaR: 3.36, // 净化半径（第4.3次调整：4.2 → 3.36，缩小 20%）
   miasmaNeed: [0.5, 0.8], // 单人 / 2 人及以上（第4.2次调整：33% / 67% → 50% / 80%）
   /** 离开安全屋多少秒后显示目标的方向箭头（找到之后也会显示） */
   arrow: { signal: 45, mutant: 45, cargo: 30, chest: 75 },
@@ -78,6 +78,8 @@ export class Quests {
   id: QuestId | null = null;
   zone = 0;
   done = false;
+  /** 任务完成后经过的时间（第4.3次调整：运送物资完成后的消失动效） */
+  doneT = 0;
   /** 上一个区域的任务已完成：本区会出现奇物宝箱 */
   chestZone = false;
   progress = 0; // 发送信号：已累积的秒数
@@ -103,6 +105,7 @@ export class Quests {
     this.zone = L.index;
     this.id = L.index <= 4 ? this.order[L.index - 1] ?? null : null;
     this.done = false;
+    this.doneT = 0;
     this.progress = 0;
     this.pyres = [];
     this.balls = [];
@@ -322,6 +325,7 @@ export class Quests {
   // —— 每帧 ——
 
   update(dt: number): void {
+    if (this.done) this.doneT += dt;
     const w = this.w;
     if (!w.zoneStarted || !w.phaseActive()) return;
     if (this.bannerT > 0) {
@@ -412,6 +416,8 @@ export class Quests {
   // —— 运送物资 ——
 
   private updateBalls(dt: number): void {
+    // 第4.3次调整：送达之后，运载点与剩下的物资球消失，不能再推动
+    if (this.done) return;
     const w = this.w;
     const p = w.player;
     const host = w.isAuthority;

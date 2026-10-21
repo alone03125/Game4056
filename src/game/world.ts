@@ -2,6 +2,8 @@
 // 第3次调整：在辐射进入橙色之前击败牢大丧尸，尸王广场的安全屋打开，可以前往第六区“隐秘核心”挑战曼巴僵尸。
 // 第2版：支持 1~4 人局域网联机（见 net.ts）。流程推进与丧尸 AI 由“权威端”（单人 / 房主）负责，
 // 其他玩家收到房主的流程消息后在本地执行同样的流程函数（地图由同一个种子生成，因此完全一致）。
+// 第4.3次调整：曼巴僵尸倒下后的过场动画（cine）在每个玩家本地播放，期间玩家不能行动、不会受伤；
+// 之后的耐久战里辐射不再扣血（辐射值照常上升）。
 
 import { ZONES, SAFEHOUSE, PLAYER, DIFFICULTY, SUIT_MAX, COOP, REVIVE_INVULN } from '../config';
 import { itemValue, ITEMS, JAR_VALUE, makeConsumable } from '../data/items';
@@ -12,7 +14,7 @@ import { CollisionWorld } from '../world/collision';
 import { NavGrid } from '../world/navgrid';
 import { generateZone, nextZoneOrigin, Obstacle, ZoneLayout } from '../world/zone';
 import { Boss, BossAI } from './boss';
-import { Mamba } from './mamba';
+import { Mamba, MAMBA_CINE } from './mamba';
 import { Enemies, Enemy } from './enemies';
 import { Fx, SoundName } from './fx';
 import type { NetHooks, RemotePlayer, Target } from './net';
@@ -29,8 +31,8 @@ export type Phase = 'explore' | 'safehouse' | 'boss' | 'dead' | 'victory';
 /** 房主广播的流程消息（core = 牢大倒下且满足条件，通往隐秘核心的安全屋打开） */
 export type PhaseMsg = 'safe' | 'leave' | 'boss' | 'victory' | 'over' | 'door' | 'core';
 
-/** 第五区安全屋提供的净化血清：每名玩家 5 支，每支按第四区的数值减少 14K 辐射 */
-export const CORE_PURIFY = { perPlayer: 5, power: 14 };
+/** 第五区安全屋提供的净化血清：每名玩家 2 支（第4.3次调整：5 → 2），每支按第四区的数值减少 14K 辐射 */
+export const CORE_PURIFY = { perPlayer: 2, power: 14 };
 
 export const SUIT_NAMES = ['', 'I', 'II', 'III', 'IV', 'V'];
 
@@ -52,7 +54,20 @@ export interface WorldEvents {
   coreOpened?(): void;
   revived?(): void;
   spectate?(): void;
+  /** 第4.3次调整：曼巴僵尸的过场动画开始 / 结束 */
+  cine?(on: boolean): void;
 }
+
+/** 曼巴僵尸倒下后的过场动画（本地计时） */
+export interface Cine {
+  t: number;
+  beat: number;
+  roared: boolean;
+  bannered: boolean;
+}
+
+/** 过场动画里的心跳声（越来越快），之后在 MAMBA_CINE.down + rise 时怒吼 */
+export const CINE_BEATS = [0.85, 1.5, 2.0, 2.4, 2.75, 3.05, 3.3, 3.52, 3.72];
 
 class Combo {
   count = 0;
@@ -127,6 +142,8 @@ export class World {
   suitTakenAt = 0; // 在第几区的安全屋拿过防护服（每个安全屋只能拿一次）
   /** 第五区：牢大丧尸已被击败，通往隐秘核心的安全屋已打开 */
   bossCleared = false;
+  /** 第4.3次调整：曼巴僵尸倒下后的过场动画 */
+  cine: Cine | null = null;
   private uidCounter = 1_000_000;
   private wsT = 0;
 
@@ -187,6 +204,7 @@ export class World {
     const L = this.layout;
     this.run.zoneIndex = L.index;
     this.zoneTime = 0;
+    this.run.stats.zoneDamage = 0;
     this.zoneStarted = true;
     this.prevDoorClosed = false;
     this.phase = 'explore';
@@ -203,7 +221,12 @@ export class World {
   }
 
   spawningActive(): boolean {
-    return this.zoneStarted && (this.phase === 'explore' || this.phase === 'boss') && !this.bossCleared;
+    return this.zoneStarted && (this.phase === 'explore' || this.phase === 'boss') && !this.bossCleared && !this.cine;
+  }
+
+  /** 曼巴僵尸的耐久战（或过场动画）中：辐射不再扣血 */
+  noRadDamage(): boolean {
+    return !!this.cine || !!this.boss?.final;
   }
 
   /** 安全屋的大门是否已打开（第五区的安全屋要先击败牢大丧尸） */
@@ -248,6 +271,67 @@ export class World {
       case 'shake': fx.shake(Number(a[0])); break;
       case 'toast': fx.toast(String(a[0]), String(a[1])); break;
       case 'smoke': fx.smoke(Number(a[0]), Number(a[1]), Number(a[2])); break;
+      case 'cine': this.startCine(); break;
+    }
+  }
+
+  // —— 第4.3次调整：曼巴僵尸倒下后的过场动画 ——
+
+  /** 开始过场动画：其余丧尸一同倒下，玩家停止行动 */
+  private startCine(): void {
+    if (this.cine) return;
+    this.cine = { t: 0, beat: 0, roared: false, bannered: false };
+    const be = this.bossEnemy;
+    for (const o of this.enemies.list) {
+      if (o.dead || o.type === 'boss' || o.type === 'chest') continue;
+      this.fx.blood(o.x, o.y, 0x6a1a14, 6);
+      if (this.isAuthority) o.dead = true;
+    }
+    if (this.isAuthority) this.enemies.eliteCount = 0;
+    this.enemies.shots = [];
+    this.player.vx = this.player.vy = 0;
+    this.input.fire = [false, false];
+    if (be) {
+      this.fx.explosion(be.x, be.y, 4.5, 0x8a4aff);
+      // 过场动画的音效不随距离衰减
+      this.fx.sound('bossSlam');
+      this.fx.sound('explosion');
+      this.fx.smoke(be.x, be.y, 18);
+    }
+    this.fx.shake(1.3);
+    this.events.cine?.(true);
+  }
+
+  private updateCine(dt: number): void {
+    const c = this.cine;
+    if (!c) return;
+    c.t += dt;
+    const be = this.bossEnemy;
+    const bx = be ? be.x : this.view.x, by = be ? be.y : this.view.y;
+    // 心跳：越来越快
+    while (c.beat < CINE_BEATS.length && c.t >= CINE_BEATS[c.beat]) {
+      c.beat++;
+      this.fx.sound('heartbeat');
+      this.fx.shake(0.1 + c.beat * 0.035);
+      if (c.beat >= 4) this.fx.smoke(bx, by, 2);
+    }
+    // 爬起后的怒吼
+    if (!c.roared && c.t >= MAMBA_CINE.down + MAMBA_CINE.rise) {
+      c.roared = true;
+      this.fx.sound('rageRoar');
+      this.fx.shake(1.6);
+      this.fx.explosion(bx, by, 7, 0xffb020);
+      this.fx.sparks(bx, by, 0xffd24a, 40, 12);
+      this.fx.smoke(bx, by, 24);
+    }
+    if (!c.bannered && c.t >= MAMBA_CINE.down + MAMBA_CINE.rise + 0.7) {
+      c.bannered = true;
+      this.fx.banner('曼巴僵尸不肯倒下', `它免疫一切伤害：坚持 ${MAMBA_CINE.finalTime} 秒！`, '#ffb020');
+    }
+    if (c.t >= MAMBA_CINE.total + 0.2) {
+      this.cine = null;
+      this.fx.toast('耐久战：辐射值仍会上升，但不会再让你失去生命', '#ffd24a');
+      this.events.cine?.(false);
     }
   }
 
@@ -293,6 +377,7 @@ export class World {
     if (this.phase === 'explore' || this.phase === 'boss') {
       this.zoneTime += dt;
       run.totalTime += dt;
+      run.stats.fightTime += dt;
     } else if (this.phase === 'safehouse') {
       run.totalTime += dt;
     }
@@ -303,14 +388,14 @@ export class World {
     if (run.eelT > 0) run.eelT -= dt;
 
     // 第4次调整：安全屋里可以手动开枪试手感（不会伤到队友和自己，也打不到门外的丧尸；自动射击不生效）
-    const allowFire = canFire && p.standing && this.phase !== 'victory';
-    p.update(dt, this.input, allowFire, this.phase !== 'safehouse');
+    const allowFire = canFire && p.standing && this.phase !== 'victory' && !this.cine;
+    p.update(dt, this.cine ? { ...this.input, moveX: 0, moveY: 0, fire: [false, false] as [boolean, boolean] } : this.input, allowFire, this.phase !== 'safehouse');
     // 是否已进入下一个安全屋（联机时先到的玩家在门内等待队友）
     const sr = this.layout.safeRoom;
     this.arrived = !!this.net && this.phase === 'explore' && !!sr && p.standing && this.inRoom(p, sr.interior);
     // Boss 的身体会把玩家挤开
     const be = this.bossEnemy;
-    if (be && !be.dead && p.standing) {
+    if (be && !be.dead && p.standing && !this.boss?.airborne()) {
       const dx = p.x - be.x, dy = p.y - be.y;
       const d = Math.hypot(dx, dy) || 0.01;
       if (d < be.r + p.r) { p.x += (dx / d) * (be.r + p.r - d); p.y += (dy / d) * (be.r + p.r - d); }
@@ -334,6 +419,7 @@ export class World {
     this.combo.update(dt);
     this.quests.update(dt);
     this.relicFx.update(dt);
+    this.updateCine(dt);
     for (const c of this.corpses) c.t += dt;
     if (this.corpses.length && this.corpses[0].t > 2.2) this.corpses = this.corpses.filter((c) => c.t <= 2.2);
 
@@ -396,7 +482,7 @@ export class World {
       this.fx.sound('beepHigh');
     }
     this.radLevel = lvl;
-    if (run.invulnT > 0 || !this.player.standing || this.arrived) return;
+    if (run.invulnT > 0 || !this.player.standing || this.arrived || this.noRadDamage()) return;
     if (lvl >= 2) {
       const pct = lvl === 3 ? 0.03 : 0.003;
       const dmg = run.maxHp * pct * dt;
@@ -611,7 +697,7 @@ export class World {
     this.fx.toast(`临时整备区里的 ${items.length} 件物品掉在了地上`, '#ffb03a');
   }
 
-  /** 第五区安全屋：在房间里放上 玩家数 × 5 支净化血清（所有玩家用同样的编号生成，由房主裁决归属） */
+  /** 第五区安全屋：在房间里放上 玩家数 × 2 支净化血清（所有玩家用同样的编号生成，由房主裁决归属） */
   private spawnCorePurify(room: { interior: { x0: number; y0: number; x1: number; y1: number } }): void {
     const players = 1 + (this.net ? [...this.net.remotes()].length : 0);
     const n = players * CORE_PURIFY.perPlayer;
@@ -699,7 +785,7 @@ export class World {
   damagePlayer(amount: number, sx: number, sy: number, src = -1): boolean {
     const run = this.run;
     const p = this.player;
-    if (!this.localTargetable()) return false;
+    if (!this.localTargetable() || this.cine) return false;
     if (run.invulnT > 0 || p.iframe > 0) return false;
     if ((this as any).__god) return false;
     // 第4.1次调整：圣盾
@@ -720,7 +806,7 @@ export class World {
   friendlyFire(dmg: number, sx: number, sy: number): void {
     const run = this.run;
     const p = this.player;
-    if (!this.localTargetable() || run.invulnT > 0 || p.ffIframe > 0) return;
+    if (!this.localTargetable() || run.invulnT > 0 || p.ffIframe > 0 || this.cine) return;
     if ((this as any).__god) return;
     const amount = dmg * COOP.friendlyFire;
     if (amount < 0.05) return;
@@ -738,7 +824,8 @@ export class World {
     const run = this.run;
     if (!this.player.standing) return;
     const before = run.hp;
-    run.hp = Math.min(run.maxHp, run.hp + amount);
+    // 精研百草的医疗箱可以让生命超过上限：普通的治疗不会再超过上限，也不会把多出来的部分扣掉
+    run.hp = Math.max(run.hp, Math.min(run.maxHp, run.hp + amount));
     if (!quiet && run.hp > before) this.fx.floatText(this.player.x, this.player.y, `+${Math.round(run.hp - before)}`, '#6aff8a');
   }
 
@@ -819,6 +906,7 @@ export class World {
     if (this.reviveT >= COOP.reviveTime) {
       this.net!.revive(r.id);
       this.fx.toast(`拉起了 ${r.name}`, '#6aff8a');
+      this.relicFx.onRevive();
       this.reviveTarget = -1;
     }
   }
@@ -835,6 +923,7 @@ export class World {
 
   private onVictory(e: Enemy | null = this.bossEnemy): void {
     this.phase = 'victory';
+    if (this.cine) { this.cine = null; this.events.cine?.(false); }
     this.victoryT = 0;
     if (this.layout.index >= 6) this.run.mambaKilled = true;
     this.run.laodaKilled = true;
@@ -948,16 +1037,22 @@ export class World {
     return true;
   }
 
+  /** 医疗箱能回复到的生命值（精研百草：生命上限的 1.5 倍） */
+  medkitCap(): number {
+    return this.run.maxHp * (this.run.has('herb') ? RELIC.herbCap : 1);
+  }
+
   /** 医疗箱：回满生命值 */
   useMedkit(): boolean {
     const run = this.run;
     const p = this.player;
-    if (run.hp >= run.maxHp - 0.01) { this.fx.toast('生命值已满', '#8d939a'); this.fx.sound('denied'); return false; }
+    const cap = this.medkitCap();
+    if (run.hp >= cap - 0.01) { this.fx.toast('生命值已满', '#8d939a'); this.fx.sound('denied'); return false; }
     const before = run.hp;
-    run.hp = run.maxHp;
+    run.hp = cap;
     this.fx.sound('heal');
     this.fx.floatText(p.x, p.y, `+${Math.round(run.hp - before)}`, '#6aff8a');
-    this.fx.toast('医疗箱：生命值已回满', '#6aff8a');
+    this.fx.toast(cap > run.maxHp ? '医疗箱：精研百草让生命值超过了上限' : '医疗箱：生命值已回满', '#6aff8a');
     return true;
   }
 

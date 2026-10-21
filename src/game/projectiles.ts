@@ -119,7 +119,8 @@ export class Projectiles {
     // 第4.1次调整：二重分裂模块让这一发分裂成 2 倍
     const multi = Math.max(1, Math.round(mods.multi ?? 1));
     const count = (def.count ?? 1) * multi;
-    let S = clamp(stats.spread + b.deg - (mods.focus ?? 0), 0, 360) * DEG;
+    // 第4.3次调整：增幅模块让下一发的散射 +30°
+    let S = clamp(stats.spread + b.deg - (mods.focus ?? 0) + (mods.spread ?? 0), 0, 360) * DEG;
     // 分裂出来的子弹至少稍微错开，不会完全重叠
     if (multi > 1 && !def.flags?.ring) S = Math.max(S, 10 * DEG * (multi - 1));
     let dmg = b.atk * stats.atk * (mods.dmg ?? 1);
@@ -139,7 +140,8 @@ export class Projectiles {
       const spdJitter = count > 1 && !def.flags?.ring ? globalRng.range(0.85, 1.1) : 1;
       const p = this.spawn(def, b, ox, oy, a, dmg, b.spd * PROJ_SPEED * spdJitter * spdMul);
       if (p) {
-        if (mods.homing) { p.homing = true; p.life = Math.max(p.life, 3); p.maxDist = Math.max(p.maxDist, 40); }
+        // 第4.3次调整：追踪模块对环形弹幕无效
+        if (mods.homing && !def.flags?.ring) { p.homing = true; p.life = Math.max(p.life, 3); p.maxDist = Math.max(p.maxDist, 40); }
         if (mods.pierce && p.pierce >= 0) p.pierce += mods.pierce;
         if (mods.blast) p.blast = true;
         p.fancy = fancy;
@@ -707,7 +709,8 @@ export class Projectiles {
     if (own && run.has('crit') && globalRng.chance(RELIC.critChance)) {
       dmg *= RELIC.critMul;
       color = '#ff5aff';
-      execute = isNormalZombie(e);
+      // 第4.3次调整：暴击命中同一只普通丧尸 3 次才直接击杀
+      if (isNormalZombie(e)) execute = ++e.critN >= RELIC.critKills;
       w.fx.sparks(e.x, e.y, 0xff5aff, 8, 5);
     }
     const src: DmgSrc = this.relicSrc(dmg, own);
@@ -734,7 +737,7 @@ export class Projectiles {
     return src;
   }
 
-  /** 电击疗法：把这次伤害的 45% 传导给附近的 2 名敌人 */
+  /** 电击疗法：把这次伤害的 30% 传导给附近的 2 名敌人 */
   private shock(from: Enemy, dmg: number): void {
     const w = this.w;
     const pts: number[] = [];

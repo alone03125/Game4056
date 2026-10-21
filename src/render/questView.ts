@@ -46,6 +46,10 @@ export class QuestView {
   private balls: THREE.Mesh[] = [];
   private drop: THREE.Group | null = null;
   private dropRing: THREE.Mesh | null = null;
+  // 第4.3次调整：送达后的消失动效
+  private dropPadMat: THREE.MeshBasicMaterial | null = null;
+  private dropBeamMat: THREE.MeshBasicMaterial | null = null;
+  private cargoFx = false;
   private miasma: { mesh: THREE.Mesh; tex: THREE.DataTexture; data: Uint8Array; t: number } | null = null;
   private chest: THREE.Group;
   private chestBody: THREE.MeshLambertMaterial;
@@ -119,6 +123,9 @@ export class QuestView {
     this.balls = [];
     this.drop = null;
     this.dropRing = null;
+    this.dropPadMat = null;
+    this.dropBeamMat = null;
+    this.cargoFx = false;
     this.miasma = null;
     const q = w.quests;
     if (q.id === 'signal') {
@@ -201,16 +208,20 @@ export class QuestView {
       }
       const g = new THREE.Group();
       g.position.set(q.drop.x, 0, -q.drop.y);
-      const pad = new THREE.Mesh(this.track(new THREE.CircleGeometry(q.drop.r, 36).rotateX(-Math.PI / 2)), this.track(new THREE.MeshBasicMaterial({ color: 0xffd24a, transparent: true, opacity: 0.16, depthWrite: false })));
+      const padMat = this.track(new THREE.MeshBasicMaterial({ color: 0xffd24a, transparent: true, opacity: 0.16, depthWrite: false }));
+      const pad = new THREE.Mesh(this.track(new THREE.CircleGeometry(q.drop.r, 36).rotateX(-Math.PI / 2)), padMat);
       pad.position.y = 0.04;
       const ring = new THREE.Mesh(this.track(new THREE.PlaneGeometry(q.drop.r * 2.3, q.drop.r * 2.3).rotateX(-Math.PI / 2)), this.track(new THREE.MeshBasicMaterial({ map: T.ringTexture(), color: 0xffd24a, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false })));
       ring.position.y = 0.06;
-      const beam = new THREE.Mesh(this.track(new THREE.CylinderGeometry(q.drop.r * 0.9, q.drop.r, 6, 24, 1, true)), this.track(new THREE.MeshBasicMaterial({ map: T.beamTexture(), color: 0xffd24a, transparent: true, opacity: 0.2, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide })));
+      const beamMat = this.track(new THREE.MeshBasicMaterial({ map: T.beamTexture(), color: 0xffd24a, transparent: true, opacity: 0.2, blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide }));
+      const beam = new THREE.Mesh(this.track(new THREE.CylinderGeometry(q.drop.r * 0.9, q.drop.r, 6, 24, 1, true)), beamMat);
       beam.position.y = 3;
       g.add(pad, ring, beam);
       this.zoneRoot.add(g);
       this.drop = g;
       this.dropRing = ring;
+      this.dropPadMat = padMat;
+      this.dropBeamMat = beamMat;
     }
     if (q.id === 'miasma' && q.mz) {
       const m = q.mz;
@@ -272,20 +283,45 @@ export class QuestView {
         if (Math.random() < dt * 3) this.particles.smoke(p.x, p.y, 1, 0x3a3634);
       }
     });
-    // 物资球与运载点
+    // 物资球与运载点（第4.3次调整：送达后，送达的物资球沉入运载点，运载点收拢成一道光柱消失，剩下的物资球沉入地面）
+    const cargoDone = q.id === 'cargo' && q.done;
+    const fade = cargoDone ? Math.min(1, q.doneT / 1.4) : 0;
+    if (cargoDone && !this.cargoFx) {
+      this.cargoFx = true;
+      if (q.doneT < 1) {
+        this.particles.sparks(q.drop.x, q.drop.y, 0xffd24a, 36, 6, 0.6);
+        for (const b of q.balls) if (!b.done) { this.particles.smoke(b.x, b.y, 6, 0x8a7a5a); this.particles.sparks(b.x, b.y, 0xffe08a, 10, 3, 0.8); }
+      }
+    }
     q.balls.forEach((b, i) => {
       const m = this.balls[i];
       if (!m) return;
-      m.visible = !b.done;
+      if (b.done || cargoDone) {
+        // 送达的物资球滑向运载点中心并沉下去；其余的直接沉入地面
+        const k = b.done ? Math.min(1, q.doneT / 0.9) : fade;
+        const e = k * k * (3 - 2 * k);
+        const tx = b.done ? q.drop.x : b.x, ty = b.done ? q.drop.y : b.y;
+        m.visible = k < 1;
+        m.position.set(b.x + (tx - b.x) * e, QUEST.ballR * (1 - e * 2.1), -(b.y + (ty - b.y) * e));
+        m.scale.setScalar(1 - e * 0.45);
+        m.rotateY(dt * 6 * e);
+        return;
+      }
+      m.visible = true;
+      m.scale.setScalar(1);
       m.position.set(b.x, QUEST.ballR, -b.y);
       const sp = Math.hypot(b.vx, b.vy);
       if (sp > 0.05) m.rotation.set(0, Math.atan2(b.vx, b.vy) + Math.PI, 0);
       m.rotateX(b.spin);
     });
     if (this.drop && this.dropRing) {
-      this.dropRing.rotation.y = time * 0.6;
-      this.dropRing.scale.setScalar(1 + Math.sin(time * 3) * 0.05);
-      this.drop.visible = true;
+      this.dropRing.rotation.y = time * 0.6 + fade * fade * 9;
+      this.dropRing.scale.setScalar((1 + Math.sin(time * 3) * 0.05) * (1 + fade * 0.35));
+      // 收拢：平面缩小、光柱拉长后消失
+      this.drop.scale.set(1 - fade, 1 + fade * 2.2, 1 - fade);
+      if (this.dropPadMat) this.dropPadMat.opacity = 0.16 * (1 - fade);
+      if (this.dropBeamMat) this.dropBeamMat.opacity = 0.2 + Math.sin(Math.PI * fade) * 0.6;
+      this.drop.visible = fade < 1;
     }
     // 瘴气
     const mz = this.miasma;

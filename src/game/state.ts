@@ -17,6 +17,9 @@ export interface RunStats {
   shotsFired: number;
   zoneTimes: number[];
   bestCombo: number;
+  /** 第4.3次调整：当前区域造成的伤害、在区域里战斗的总时间（输出统计） */
+  zoneDamage: number;
+  fightTime: number;
 }
 
 /** 开局武器（数据依然由公式推出；图鉴里也会显示） */
@@ -54,11 +57,14 @@ export class RunState {
   relics: RelicId[] = [];
   /** 当前连杀数（愈战愈勇） */
   combo = 0;
+  /** 第4.3次调整：友谊地久天长的层数、聚精会神的专注代币 */
+  friendN = 0;
+  focusTokens = 0;
   gold = 0; // 背包携带金币
   totalTime = 0;
   stats: RunStats = {
     kills: 0, eliteKills: 0, damageDealt: 0, damageTaken: 0, goldEarned: 0, itemsFound: 0, shotsFired: 0,
-    zoneTimes: [], bestCombo: 0,
+    zoneTimes: [], bestCombo: 0, zoneDamage: 0, fightTime: 0,
   };
   // 增益
   invulnT = 0;
@@ -101,7 +107,21 @@ export class RunState {
     if (this.has('unyield') && this.lowHp()) a += RELIC.unyieldAtk;
     if (this.has('might')) a += RELIC.mightAtk;
     if (this.has('scepter')) a += Math.min(RELIC.scepterMax, Math.floor((this.gold + this.bank) / RELIC.scepterPer) * RELIC.scepterStep);
+    if (this.has('friend')) a += this.friendN * RELIC.friendAtk;
+    if (this.has('focus')) a += (this.focusTokens - 1) * RELIC.focusAtk;
     return a;
+  }
+
+  /** 移动速度的奇物倍率（聚精会神：-6%，每枚代币 +6%） */
+  focusSpeed(): number {
+    return this.has('focus') ? 1 + (this.focusTokens - 1) * RELIC.focusSpeed : 1;
+  }
+
+  /** 奇物图标角落显示的数字（友谊地久天长的层数、聚精会神的代币） */
+  relicBadge(id: RelicId): number | null {
+    if (id === 'friend') return this.friendN;
+    if (id === 'focus') return this.focusTokens;
+    return null;
   }
 
   lowHp(): boolean {

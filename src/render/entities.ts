@@ -5,7 +5,8 @@ import { ELITE_COLORS, ENEMY_TYPES, RARITY_HEX } from '../config';
 import { BULLETS } from '../data/bullets';
 import { Gun } from '../data/guns';
 import { ITEMS } from '../data/items';
-import type { World } from '../game/world';
+import { CINE_BEATS, type World } from '../game/world';
+import { MAMBA_SKILL } from '../game/mamba';
 import type { WorldItem } from '../game/pickups';
 import type { RemotePlayer } from '../game/net';
 import { FANCY_IRI, FANCY_SHINY } from '../game/projectiles';
@@ -110,6 +111,7 @@ export class EntityView {
   beamGlow: THREE.InstancedMesh; // 曼巴僵尸的激光（外层光晕）
   beamCore: THREE.InstancedMesh; // 激光内芯
   teleRing: THREE.InstancedMesh; // 冲击波
+  teleSlam: THREE.InstancedMesh; // 第4.3次调整：曼巴僵尸跃起落地的冲击
   items = new Map<number, { g: THREE.Group; model: THREE.Object3D; beam: THREE.Mesh; ring: THREE.Mesh }>();
   shadowOn = true;
   private itemBeamGeo = new THREE.CylinderGeometry(0.12, 0.3, 7, 10, 1, true);
@@ -167,6 +169,7 @@ export class EntityView {
     this.beamGlow = this.instanced(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), add(0xb04aff), 6);
     this.beamCore = this.instanced(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), add(0xffe8ff), 6);
     this.teleRing = this.instanced(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: T.ringTexture(), color: 0x6ae8ff, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }), 4);
+    this.teleSlam = this.instanced(new THREE.PlaneGeometry(1, 1).rotateX(-Math.PI / 2), new THREE.MeshBasicMaterial({ map: T.ringTexture(), color: 0xffa030, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }), 3);
   }
 
   private instanced(geo: THREE.BufferGeometry, mat: THREE.Material, n: number, shadow = false): THREE.InstancedMesh {
@@ -428,6 +431,7 @@ export class EntityView {
       this.beamGlow.count = 0;
       this.beamCore.count = 0;
       this.teleRing.count = 0;
+      this.teleSlam.count = 0;
       // 倒下的 Boss（胜利，或第五区击败牢大后打开隐秘核心）
       if (this.boss) {
         this.boss.body.rotation.z = Math.min(Math.PI / 2, this.boss.body.rotation.z + dt * 1.2);
@@ -444,28 +448,51 @@ export class EntityView {
     }
     const r = this.boss;
     const B = w.boss;
-    r.root.position.set(be.x, 0, -be.y);
-    r.root.rotation.y = be.face;
     const anim = B ? B.anim : 0;
+    const pose = B?.throwPose ?? 0;
+    // 第4.3次调整：跃起时整个模型升到空中
+    const lift = anim === 7 ? pose * MAMBA_SKILL.leapH : 0;
+    r.root.position.set(be.x, r.root.position.y + (lift - r.root.position.y) * Math.min(1, dt * 18), -be.y);
+    r.root.rotation.y = be.face;
     const sw = Math.sin(be.phase) * 0.45;
-    r.legL.rotation.z = anim === 2 ? 0.6 : sw;
-    r.legR.rotation.z = anim === 2 ? -0.6 : -sw;
-    let lean = 0, armL = -sw * 0.5, armR = sw * 0.5;
+    r.legL.rotation.z = anim === 2 ? 0.6 : anim === 7 ? 0.9 : sw;
+    r.legR.rotation.z = anim === 2 ? -0.6 : anim === 7 ? -0.9 : -sw;
+    let lean = 0, armL = -sw * 0.5, armR = sw * 0.5, sink = 0;
     if (anim === 1) { lean = -0.15; armL = armR = -1.2 + Math.sin(time * 20) * 0.05; }
     else if (anim === 2) { lean = 0.45; armL = armR = 1.3; }
-    else if (anim === 3) { armR = -2.4 * (B?.throwPose ?? 0); armL = 0.3; lean = -0.1; }
+    else if (anim === 3) { armR = -2.4 * pose; armL = 0.3; lean = -0.1; }
     else if (anim === 4) { lean = Math.sin(time * 6) * 0.1; armL = armR = 0.4; }
-    r.body.rotation.z += (-lean - r.body.rotation.z) * Math.min(1, dt * 10);
+    else if (anim === 5) {
+      // 倒地：仰面倒下，随着心跳抽搐
+      const c = w.cine;
+      const twitch = c && c.beat > 0 ? Math.max(0, 1 - (c.t - CINE_BEATS[c.beat - 1]) * 6) * 0.12 : 0;
+      lean = -Math.PI / 2 * 0.96 + twitch;
+      armL = 1.2 + twitch * 3; armR = -0.4 - twitch * 3; sink = -0.55;
+    } else if (anim === 6) {
+      // 爬起：颤抖着撑起身体
+      const k = pose;
+      lean = -Math.PI / 2 * 0.96 * (1 - k) + Math.sin(time * 38) * 0.05 * (1 - k);
+      armL = armR = 1.6 * (1 - k) - 0.6 * k; sink = -0.55 * (1 - k);
+    } else if (anim === 7) { lean = 0.25; armL = armR = -2.2; }
+    const bodyK = anim === 5 || anim === 6 ? 14 : 10;
+    r.body.rotation.z += (-lean - r.body.rotation.z) * Math.min(1, dt * bodyK);
+    r.body.position.y += (sink - r.body.position.y) * Math.min(1, dt * bodyK);
     r.armL.rotation.z += (armL - r.armL.rotation.z) * Math.min(1, dt * 12);
     r.armR.rotation.z += (armR - r.armR.rotation.z) * Math.min(1, dt * 12);
     const enraged = B?.enraged;
     const mb = r.kind === 'mamba';
-    r.flesh.emissive.setHex(be.flash > 0 ? 0x888888 : enraged ? (mb ? 0x2a0440 : 0x3a0400) : 0x000000);
-    r.eyes.color.setHex(enraged ? 0xff2a1a : mb ? 0x4affe0 : 0xffd23a);
+    // 第4.3次调整：耐久战中全身泛着红金色的光
+    const fin = !!B?.final;
+    const glowK = 0.5 + Math.sin(time * 7) * 0.5;
+    r.flesh.emissive.setHex(be.flash > 0 ? 0x888888 : fin ? (glowK > 0.5 ? 0x7a2a00 : 0x5a1400) : enraged ? (mb ? 0x2a0440 : 0x3a0400) : 0x000000);
+    r.eyes.color.setHex(fin ? 0xffc020 : enraged ? 0xff2a1a : mb ? 0x4affe0 : 0xffd23a);
+    // 耐久战中体型变大一些（曼巴僵尸的模型本身是 1.12 倍）
+    const sc = (mb ? 1.12 : 1) * (fin ? 1.1 : 1);
+    r.root.scale.setScalar(r.root.scale.x + (sc - r.root.scale.x) * Math.min(1, dt * 3));
     // 蛇尾摆动
     for (let i = 0; i < r.tail.length; i++) r.tail[i].rotation.y = Math.sin(time * 3 + i * 0.7) * 0.25 + (anim === 2 ? 0 : 0.05);
     // 预警与技能范围
-    let li = 0, ci = 0, bi = 0, ri = 0;
+    let li = 0, ci = 0, bi = 0, ri = 0, si = 0;
     for (const t of B?.telegraphs ?? []) {
       const k = t.t / t.dur;
       if (t.kind === 'beam' && bi < 6) {
@@ -482,6 +509,16 @@ export class EntityView {
         dummy.updateMatrix();
         this.beamCore.setMatrixAt(bi, dummy.matrix);
         bi++;
+        continue;
+      }
+      if (t.kind === 'slam') {
+        if (si >= 3) continue;
+        dummy.position.set(t.x, 0.09, -t.y);
+        dummy.rotation.set(0, 0, 0);
+        const rr = t.r * 2 * (0.4 + k * 0.9);
+        dummy.scale.set(rr, 1, rr);
+        dummy.updateMatrix();
+        this.teleSlam.setMatrixAt(si++, dummy.matrix);
         continue;
       }
       if (t.kind === 'ring' && ri < 4) {
@@ -515,6 +552,8 @@ export class EntityView {
     this.beamGlow.count = bi;
     this.beamCore.count = bi;
     this.teleRing.count = ri;
+    this.teleSlam.count = si;
+    this.teleSlam.instanceMatrix.needsUpdate = true;
     this.teleLine.instanceMatrix.needsUpdate = true;
     this.teleCircle.instanceMatrix.needsUpdate = true;
     this.beamGlow.instanceMatrix.needsUpdate = true;

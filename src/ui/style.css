@@ -47,6 +47,8 @@ button { font-family: var(--font); }
 .hp-bar { position: relative; flex: 1; height: 18px; background: rgba(0,0,0,0.6); border: 1px solid var(--line2); overflow: hidden; }
 .hp-fill { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(180deg, #ff6a5a, #c8281a); transition: width .15s; }
 .hp-lag { position: absolute; left: 0; top: 0; bottom: 0; background: #ffd0a0; transition: width .6s .2s; }
+/* 第4.3次调整：精研百草让生命超过上限，超出的部分以金色显示 */
+.hp-over { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(180deg, #fff0a0, #e8b030); box-shadow: 0 0 8px #ffd24a; transition: width .15s; }
 .hp-text { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; font: 700 12px var(--mono); text-shadow: 0 1px 2px #000; }
 .stat-row { display: flex; gap: 12px; margin-top: 6px; font-size: 12px; color: var(--dim); flex-wrap: wrap; }
 .stat-row b { color: var(--text); font-family: var(--mono); font-weight: 700; }
@@ -85,7 +87,41 @@ button { font-family: var(--font); }
 .quest .qw { color: var(--dim); }
 .quest .qc { color: #ffd24a; margin-top: 3px; }
 .relic-row { display: flex; gap: 4px; margin-top: 6px; flex-wrap: wrap; }
-.relic-row img { width: 24px; height: 24px; pointer-events: auto; image-rendering: auto; }
+.relic-row .ri { position: relative; width: 24px; height: 24px; pointer-events: auto; }
+.relic-row img { width: 24px; height: 24px; display: block; image-rendering: auto; }
+/* 第4.3次调整：友谊地久天长的层数、聚精会神的代币 */
+.relic-row .ri b { position: absolute; right: -4px; bottom: -5px; font: 800 12px var(--mono); line-height: 12px; text-shadow: 0 0 2px #000, 0 1px 2px #000, 1px 0 2px #000; }
+
+/* 第4.3次调整：输出排行（联机）/ 输出统计（单人） */
+.lb { margin-top: 6px; padding: 6px 10px; font-size: 12px; }
+.lb .lb-h, .lb .lb-r { display: flex; align-items: center; gap: 6px; }
+.lb .lb-h { color: var(--dim); font-weight: 800; margin-bottom: 3px; }
+.lb .lb-h .n { color: #ffb03a; }
+.lb .n { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+.lb .lb-h span:not(.n), .lb .lb-r span:not(.n) { width: 64px; text-align: right; font-family: var(--mono); }
+.lb .lb-r i { width: 14px; font-style: normal; color: var(--dim); font-family: var(--mono); }
+.lb .lb-r.me { background: rgba(255,210,74,0.08); }
+.lb .lb-r.dead { opacity: .45; }
+.lb .lb-s { display: flex; justify-content: space-between; }
+.lb .lb-s span { color: var(--dim); }
+.lb .lb-s b { font-family: var(--mono); color: var(--text); }
+
+/* 第4.3次调整：鼠标移到面板上时，面板变得几乎透明，不挡住视野 */
+.fadeable { transition: opacity .15s; }
+.fadeable.peek { opacity: 0.2; }
+
+/* 第4.3次调整：曼巴僵尸的过场动画——其余界面隐去，上下出现黑边 */
+#hud.cine .hud-tl, #hud.cine .hud-tr, #hud.cine .hud-bl, #hud.cine .hud-br, #hud.cine .hints { opacity: 0; transition: opacity .5s; }
+.hud-tl, .hud-tr, .hud-bl, .hud-br { transition: opacity .5s; }
+.cine-bars .cb { position: absolute; left: 0; right: 0; height: 0; background: #000; transition: height .8s cubic-bezier(.2,.7,.2,1); pointer-events: none; }
+.cine-bars .cb.t { top: 0; }
+.cine-bars .cb.b { bottom: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+#hud.cine .cine-bars .cb { height: 12vh; }
+.cine-sub { font-size: 24px; letter-spacing: 6px; color: #d8c8b8; text-shadow: 0 0 12px rgba(255,60,40,0.6); animation: cineSub 1.2s ease-in-out infinite alternate; }
+@keyframes cineSub { from { opacity: .55; } to { opacity: 1; } }
+.cine-red { position: absolute; inset: 0; pointer-events: none; opacity: 0; box-shadow: inset 0 0 220px 60px rgba(200,10,0,0.95); }
+.cine-red.gold { box-shadow: inset 0 0 260px 80px rgba(255,140,20,0.9); }
+.cine-flash { position: absolute; inset: 0; pointer-events: none; opacity: 0; background: radial-gradient(circle at 50% 45%, rgba(255,240,180,0.95), rgba(255,120,20,0.6) 45%, rgba(160,20,0,0.35) 100%); }
 
 .hud-bl { position: absolute; left: 16px; bottom: 16px; display: flex; gap: 10px; align-items: flex-end; }
 .gun-card { width: 290px; padding: 9px 11px 10px; border-left: 3px solid #888; }
@@ -136,6 +172,11 @@ button { font-family: var(--font); }
 .boss-bar .bn { font-weight: 900; font-size: 12px; letter-spacing: 3px; color: #ff6a5a; text-shadow: 0 2px 6px #000; }
 .boss-bar .bb { height: 14px; margin-top: 4px; background: rgba(0,0,0,0.7); border: 1px solid #ff6a5a; position: relative; }
 .boss-bar .bf { position: absolute; left: 0; top: 0; bottom: 0; background: linear-gradient(180deg, #ff4a3a, #a01a10); transition: width .15s; }
+/* 第4.3次调整：曼巴僵尸的耐久战——红金色的计时条 */
+.boss-bar.final .bn { color: #ffd24a; text-shadow: 0 0 10px rgba(255,120,20,0.9), 0 2px 6px #000; }
+.boss-bar.final .bb { border-color: #ffd24a; box-shadow: 0 0 14px rgba(255,140,20,0.7); animation: finalPulse 1s ease-in-out infinite alternate; }
+.boss-bar.final .bf { background: linear-gradient(90deg, #c01a10, #ff6a1a 55%, #ffd24a); transition: width .1s linear; }
+@keyframes finalPulse { from { box-shadow: 0 0 8px rgba(255,140,20,0.5); } to { box-shadow: 0 0 20px rgba(255,200,60,0.95); } }
 .boss-pips { display: flex; gap: 4px; justify-content: center; margin-top: 4px; }
 .boss-pips i { width: 32px; height: 4px; background: rgba(255,106,90,0.18); border: 1px solid rgba(255,106,90,0.5); }
 .boss-pips i.on { background: #ff6a5a; }

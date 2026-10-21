@@ -49,6 +49,9 @@ export interface RemotePlayer {
   paused: boolean;
   rad: number;
   kills: number;
+  /** 第4.3次调整：本局总输出、当前区域输出（输出排行） */
+  dmgTotal: number;
+  dmgZone: number;
   // 平滑
   tx: number;
   ty: number;

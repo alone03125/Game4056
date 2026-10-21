@@ -3,6 +3,7 @@
 // 投掷技能改为连续锁定玩家当前位置、连续投出多块石头，预警到砸落的时间更短。
 // 第2版联机：AI 只在房主处运行，追击最近的玩家；其他玩家的 Boss 处于镜像模式，只接收状态。
 // 第4.1次调整：Boss 的碰撞、冲刺等伤害改为由被打的玩家本地判定（镜像模式下的 mirrorHits）。
+// 第4.3次调整：接口增加曼巴僵尸耐久战需要的免疫、跃起与计时。
 
 import { BOSS } from '../config';
 import { damp, wrapAngle, clamp } from '../util/math';
@@ -11,10 +12,10 @@ import type { Enemy, EnemyShot } from './enemies';
 import type { Target } from './net';
 import type { World } from './world';
 
-export type TeleKind = 'line' | 'circle' | 'beam' | 'ring';
-export const TELE_KINDS: TeleKind[] = ['line', 'circle', 'beam', 'ring'];
+export type TeleKind = 'line' | 'circle' | 'beam' | 'ring' | 'slam';
+export const TELE_KINDS: TeleKind[] = ['line', 'circle', 'beam', 'ring', 'slam'];
 
-/** 地面预警 / 技能范围（line = 冲刺路线，circle = 落点，beam = 激光，ring = 冲击波） */
+/** 地面预警 / 技能范围（line = 冲刺路线，circle = 落点，beam = 激光，ring = 冲击波，slam = 曼巴僵尸跃起后落地的冲击） */
 export interface Telegraph {
   kind: TeleKind;
   x: number;
@@ -36,14 +37,24 @@ export interface BossAI {
   e: Enemy;
   mirror: boolean;
   enraged: boolean;
-  anim: number; // 动画：0 走 1 蓄力/施法 2 冲刺 3 投掷 4 眩晕
-  throwPose: number;
+  anim: number; // 动画：0 走 1 蓄力/施法 2 冲刺 3 投掷 4 眩晕 5 倒地 6 爬起 7 跃起在空中
+  throwPose: number; // 投掷的姿势；爬起时为进度，跃起时为高度（0~1）
   telegraphs: Telegraph[];
+  /** 第4.3次调整：曼巴僵尸的耐久战（免疫伤害，生命条变为计时条） */
+  final: boolean;
   stateIndex(): number;
   updateAI(e: Enemy, dt: number): void;
   onDamaged(e: Enemy, amt: number): void;
   tickTelegraphs(dt: number): void;
-  applyState(state: number, anim: number, enraged: boolean, throwPose: number, tele: number[][]): void;
+  applyState(state: number, anim: number, enraged: boolean, throwPose: number, tele: number[][], fin?: number): void;
+  /** 当前是否免疫玩家的伤害 */
+  immune(): boolean;
+  /** 跃起在空中：不会被命中，也不会撞到玩家 */
+  airborne(): boolean;
+  /** 房主：生命归零时是否阻止死亡（曼巴僵尸第一次倒下后会再次爬起） */
+  preventDeath(): boolean;
+  /** 耐久战的剩余时间（秒）；没有时为 -1 */
+  timer(): number;
   /** 生命条显示：当前阶段 / 总阶段数 */
   phaseInfo(): { phase: number; total: number };
   /** 镜像模式：本地判定 Boss 对自己造成的伤害（第4.1次调整） */
@@ -129,6 +140,7 @@ export class Boss implements BossAI {
   anim = 0;
   throwPose = 0;
   mirror: boolean;
+  final = false;
   private focus: Target | null = null;
   private volley = 0; // 本轮还要投出的石头数
   private volleyT = 0;
@@ -172,6 +184,11 @@ export class Boss implements BossAI {
     }
     void amt;
   }
+
+  immune(): boolean { return false; }
+  airborne(): boolean { return false; }
+  preventDeath(): boolean { return false; }
+  timer(): number { return -1; }
 
   /** 镜像模式：应用房主发来的状态 */
   applyState(state: number, anim: number, enraged: boolean, throwPose: number, tele: number[][]): void {

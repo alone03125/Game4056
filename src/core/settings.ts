@@ -3,10 +3,11 @@
 import { Difficulty } from '../config';
 
 /** 第2版：可以自定义的按键 */
-export type KeyAction = 'interact' | 'bag' | 'reload' | 'autoL' | 'autoR' | 'item1' | 'item2' | 'item3' | 'item4' | 'item5' | 'item6' | 'item7';
-export const KEY_ACTIONS: KeyAction[] = ['interact', 'bag', 'reload', 'autoL', 'autoR', 'item1', 'item2', 'item3', 'item4', 'item5', 'item6', 'item7'];
+/** 第4.3次调整：特殊交互键（聚精会神的技巧检定，默认空格） */
+export type KeyAction = 'interact' | 'bag' | 'reload' | 'autoL' | 'autoR' | 'special' | 'item1' | 'item2' | 'item3' | 'item4' | 'item5' | 'item6' | 'item7';
+export const KEY_ACTIONS: KeyAction[] = ['interact', 'bag', 'reload', 'autoL', 'autoR', 'special', 'item1', 'item2', 'item3', 'item4', 'item5', 'item6', 'item7'];
 export const DEFAULT_KEYS: Record<KeyAction, string> = {
-  interact: 'KeyF', bag: 'Tab', reload: 'KeyR', autoL: 'KeyQ', autoR: 'KeyE',
+  interact: 'KeyF', bag: 'Tab', reload: 'KeyR', autoL: 'KeyQ', autoR: 'KeyE', special: 'Space',
   item1: 'Digit1', item2: 'Digit2', item3: 'Digit3', item4: 'Digit4', item5: 'Digit5', item6: 'Digit6', item7: 'Digit7',
 };
 

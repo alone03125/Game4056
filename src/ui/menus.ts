@@ -41,7 +41,7 @@ export interface TeamLine { name: string; slotColor: string; kills: number; stat
 
 const KEY_NAMES: Record<KeyAction, string> = {
   interact: '交互（拾取 / 拉起队友 / 祭坛、商店、防护服柜、医疗箱）', bag: '背包（同时暂停游戏）', reload: '提前换弹',
-  autoL: '主手自动射击开关', autoR: '副手自动射击开关',
+  autoL: '主手自动射击开关', autoR: '副手自动射击开关', special: '特殊交互（聚精会神的技巧检定）',
   item1: '道具：止痛药', item2: '道具：奶白金', item3: '道具：过热模块', item4: '道具：鳗',
   item5: '道具：净化血清', item6: '道具：零件1型', item7: '道具：零件2型',
 };
@@ -329,6 +329,7 @@ export class Menus {
         k(`${keyLabel(K.autoL)} / ${keyLabel(K.autoR)}`, '主手 / 副手 自动射击开关'), k(keyLabel(K.reload), '提前换弹'),
         k(keyLabel(K.interact), '拉起倒地的队友、拾取地上的物品、使用安全屋里的设施'),
         k(keyLabel(K.bag), '打开背包（同时暂停游戏）'), k(items, '使用快捷栏道具：止痛药、奶白金、过热模块、鳗、净化血清、零件1型、零件2型；选择奇物时按 1 ~ 3 选择'),
+        k(keyLabel(K.special), '特殊交互：奇物“聚精会神”的技巧检定'),
         k('ESC', '暂停与菜单'), k('空格', '观战时切换队友')),
       h('h3', null, '基本循环'),
       h('p', null, '持枪杀敌开路并获取金币，在区域中寻找枪械、子弹与道具，抵达区域对角的安全屋休整、改装枪械并升级自身。共 4 个区域，之后是尸王“牢大丧尸”。据说在辐射进入橙色之前击败尸王，就能找到通往隐秘核心的路……'),
@@ -449,6 +450,7 @@ export class Menus {
         if (L.dmg) fx.push(stat('伤害', `×${L.dmg}`, 'good'));
         if (L.speed) fx.push(stat('弹速', `×${L.speed}`, 'good'));
         if (L.focus) fx.push(stat('散射', `-${L.focus}°`, 'good'));
+        if (L.spread) fx.push(stat('散射', `+${L.spread}°`, 'bad'));
         if (L.shine) fx.push(stat('闪耀虹彩', '下一发', 'good'));
         if (L.loop) fx.push(stat('循环', '下一发', 'good'));
         if (L.short) fx.push(stat('换弹时间', '90% 减半 / 10% ×4'));
@@ -529,7 +531,7 @@ export class Menus {
       zombie(enemyIcon('laoda'), '#ff4a3a', BOSS.name, [['生命', `每阶段 ${fmtNum(BOSS.hpPerPhase)}，共 ${BOSS.phases} 阶段`], ['攻击', String(BOSS.atk)]],
         '尸王广场的主人：会蓄力冲刺、连续投掷石块，血量降低时召唤精英丧尸，半血后狂暴。冲刺撞墙会眩晕。');
       zombie(enemyIcon('mamba'), '#c06aff', MAMBA.name, [['生命', fmtNum(MAMBA.hp)], ['攻击', String(MAMBA.atk)]],
-        '隐秘核心的主人：旋转激光、近身冲击波、大范围投石，狂暴后连续冲撞，并不断召唤精英丧尸。激光会被柱子挡住。');
+        '隐秘核心的主人：旋转激光、近身冲击波、大范围投石，狂暴后连续冲撞，并不断召唤精英丧尸。激光会被柱子挡住。据说它倒下之后还会再爬起来……');
       zombie(enemyIcon('chest'), '#ffd24a', '奇物宝箱', [['生命', CHEST_HP.slice(2).map((v) => fmtNum(v)).join(' / ')]],
         '完成区域任务后，下一个区域会出现奇物宝箱（生命值按第二 ~ 第五区递增）。它不会动也不会攻击，打破后掉落奇物。');
       body.appendChild(grid);

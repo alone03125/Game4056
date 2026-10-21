@@ -327,6 +327,7 @@ export function castOnce(g: Gun, st: CastState, resolve?: (b: Bullet) => Bullet)
       if (lg.dmg) mods.dmg = (mods.dmg ?? 1) * lg.dmg;
       if (lg.speed) mods.speed = (mods.speed ?? 1) * lg.speed;
       if (lg.focus) mods.focus = (mods.focus ?? 0) + lg.focus;
+      if (lg.spread) mods.spread = (mods.spread ?? 0) + lg.spread;
       if (lg.shine) mods.shine = true;
       if (lg.multi) mods.multi = (mods.multi ?? 1) * lg.multi;
       if (lg.loop) st.pendLoop++;

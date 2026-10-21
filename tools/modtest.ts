@@ -1,12 +1,13 @@
 // 规则测试：第3次调整（枪械修饰语、参数硬下限、道具前缀、Rarity5、金币公式）与第4次调整（盲盒、玉米粒、苦力怕、奇点吸引投掷物、安全屋试枪、拉起无敌），
 // 以及第4.1次调整（权重、新模块、全局强化零件1型、招财弹、临时整备区、区域任务、奇物宝箱与奇物、联机本地判定碰撞伤害）；
-// 第4.2次调整更新了权重、盲盒、模块的攻击倍率与瘴气的完成比例，删除了熔炼模块。
+// 第4.2次调整更新了权重、盲盒、模块的攻击倍率与瘴气的完成比例，删除了熔炼模块；
+// 第4.3次调整：追踪模块与环形弹幕、增幅模块的散射、奇物的削弱与新奇物、曼巴僵尸的耐久战、区域倍率与宝箱生命。
 // 用法：npx esbuild tools/modtest.ts --bundle --platform=node --outfile=tools/.modtest.cjs && node tools/.modtest.cjs
 import { RunState } from '../src/game/state';
 import { World } from '../src/game/world';
 import { nullFx } from '../src/game/fx';
 import { BULLETS, BULLET_IDS, BulletId, makeBullet, RARE_BULLETS } from '../src/data/bullets';
-import { GUN_MODS, gunStats, makeFixedGun, makeGun, rollRarity } from '../src/data/guns';
+import { castOnce, GUN_MODS, gunStats, makeFixedGun, makeGun, rollRarity } from '../src/data/guns';
 import { altarBuy, altarValue, buyBullet, buyGun } from '../src/game/shop';
 import { bulletToSlot, moveItem } from '../src/game/inventory';
 import { QUEST, QUEST_IDS, questOrder, QuestId } from '../src/game/quest';
@@ -14,7 +15,10 @@ import { Coop } from '../src/net/coop';
 import { isNormalZombie } from '../src/game/enemies';
 import { MemHub } from '../src/net/transport';
 import { itemValue, makeConsumable, rollGrade } from '../src/data/items';
-import { CREEPER, enhanceCoef, ZONES } from '../src/config';
+import { CHEST_HP, CREEPER, enhanceCoef, ZONES } from '../src/config';
+import { Mamba, MAMBA_CINE } from '../src/game/mamba';
+import { QTE, RELIC, RELIC_IDS } from '../src/data/relics';
+import { CORE_PURIFY } from '../src/game/world';
 import { Rng } from '../src/util/rng';
 
 let fails = 0;
@@ -522,6 +526,8 @@ const tick = (w: World, sec: number, each?: () => void) => { for (let i = 0; i <
   w.relicFx.shieldCd = 0;
   for (let i = 0; i < 100 && !w.relicFx.blocks(); i++) w.relicFx.shieldCd = 0;
   check('圣盾：5 秒内不会再次触发', !w.relicFx.blocks() && w.relicFx.shieldCd > 4.9);
+  check('圣盾：触发后 5 秒内造成的伤害 -30%', Math.abs(w.relicFx.dmgMul() - 0.7) < 1e-9 && w.relicFx.weakT > 4.9);
+  w.relicFx.weakT = 0;
   run.relics.push('suit');
   check('超级防护服：单人辐射 -33%', Math.abs(w.relicFx.radMul() - 0.67) < 1e-9);
   const e = w.enemies.spawn('office', w.player.x + 8, w.player.y, 0);
@@ -533,7 +539,8 @@ const tick = (w: World, sec: number, each?: () => void) => { for (let i = 0; i <
   w.enemies.damage(c, 100, { corrode: true });
   const h1 = c.hp;
   w.enemies.damage(c, 100, null);
-  check('腐蚀疗法：之后受到的伤害 +40%', Math.abs(h1 - c.hp - 140) < 1e-6, (h1 - c.hp).toFixed(1));
+  check('腐蚀疗法：之后受到的伤害 +25%', Math.abs(h1 - c.hp - 125) < 1e-6, (h1 - c.hp).toFixed(1));
+  check('电击 30% / 灼烧 20% / 暴击 3 次才直接击杀', RELIC.shockPct === 0.3 && RELIC.burnPct === 0.2 && RELIC.critKills === 3);
   check('奇物不会重复出现', (() => { w.relicFx.offer = null; w.relicFx.grant(); return !!w.relicFx.offer && w.relicFx.offer.every((id) => !run.has(id)); })());
 }
 // 21. 联机：碰撞伤害由被打的玩家本地判定，再通知房主
@@ -563,5 +570,88 @@ const tick = (w: World, sec: number, each?: () => void) => { for (let i = 0; i <
   check('联机：远程玩家本地判定被丧尸撞到', cli.run.hp < hp0 && !!m, `${hp0} → ${cli.run.hp.toFixed(1)}`);
   check('联机：房主收到后让那只丧尸进入出手冷却', e.hitCd > 0.9, `hitCd=${e.hitCd.toFixed(2)}`);
   check('联机：房主那边的血量同步', coops[0].remoteList()[0] && Math.abs(coops[0].remoteList()[0].hp - cli.run.hp) < 1);
+}
+// 22. 第4.3次调整：模块、新奇物与数值
+{
+  check('环形弹幕 19 / 感应地雷 180 / 炸弹 160', BULLETS.nova.atk === 19 && BULLETS.mine.atk === 180 && BULLETS.bomb.atk === 160);
+  check('区域倍率：第二区 1.4~2.4 … 第六区 5.0~6.0', ZONES.map((z) => z.hpMul.join('~')).join(' ') === '0.6~1.6 1.4~2.4 2.2~4.5 3~6 4~6 5~6');
+  check('奇物宝箱生命 2000 / 3500 / 6500 / 10000', CHEST_HP.slice(2).join('/') === '2000/3500/6500/10000');
+  check('隐秘核心前的净化血清每人 2 支', CORE_PURIFY.perPlayer === 2);
+  check('清除瘴气的净化半径缩小 20%', Math.abs(QUEST.miasmaR - 4.2 * 0.8) < 1e-9);
+  const w = freshWorld();
+  const rng = new Rng(5);
+  // 追踪模块对环形弹幕无效
+  const g = makeFixedGun('测试', 'T-1', 2, 1, 0.3, 3, 0, 1, rng);
+  g.bullets = [makeBullet('mHoming', rng), makeBullet('nova', rng, 1), null];
+  w.run.guns = [g, null];
+  w.projs.clear();
+  w.input.aimX = w.player.x + 10; w.input.aimY = w.player.y;
+  w.input.fire = [true, false];
+  for (let i = 0; i < 30 && w.projs.list.length === 0; i++) w.update(1 / 60, true);
+  w.input.fire = [false, false];
+  check('追踪模块：对环形弹幕无效', w.projs.list.length > 0 && w.projs.list.every((p) => !p.homing), String(w.projs.list.length));
+  // 增幅模块：散射 +30°
+  const g2 = makeFixedGun('测试', 'T-2', 2, 1, 0.3, 3, 0, 1, rng);
+  g2.bullets = [makeBullet('mPower', rng), makeBullet('std', rng, 1), null];
+  const shots = castOnce(g2, { cursor: 0, loops: [], pendLoop: 0 });
+  check('增幅模块：伤害 ×1.6、散射 +30°', shots.length === 1 && shots[0].mods.dmg === 1.6 && shots[0].mods.spread === 30);
+  // 新奇物
+  const run = w.run;
+  check('奇物共 20 种；单人时不会出现友谊地久天长', RELIC_IDS.length === 20 && !w.relicFx.pool().includes('friend'));
+  run.relics.push('herb');
+  run.hp = run.maxHp * 0.5;
+  w.phase = 'safehouse';
+  w.useMedkit();
+  check('精研百草：医疗箱回复到生命上限的 1.5 倍', Math.abs(run.hp - run.maxHp * 1.5) < 1e-6, `${run.hp}/${run.maxHp}`);
+  w.healPlayer(10, true);
+  check('精研百草：普通治疗不会扣掉超出上限的生命', Math.abs(run.hp - run.maxHp * 1.5) < 1e-6);
+  w.phase = 'explore';
+  const a0 = run.atkBonus(), s0 = w.player.speed();
+  w.relicFx.offer = ['focus', 'crit', 'bow'];
+  w.relicFx.choose('focus');
+  check('聚精会神：获得时 2 枚代币（攻击倍率 +0.20x、移速 +6%）', run.focusTokens === 2 && Math.abs(run.atkBonus() - a0 - 0.2) < 1e-9 && Math.abs(w.player.speed() / s0 - 1.06) < 1e-9);
+  run.focusTokens = 0;
+  check('聚精会神：没有代币时 -0.20x、-6%', Math.abs(run.atkBonus() - a0 + 0.2) < 1e-9 && Math.abs(w.player.speed() / s0 - 0.94) < 1e-9);
+  run.focusTokens = 2;
+  w.relicFx.qteT = 0;
+  w.update(1 / 60, true);
+  const q = w.relicFx.qte;
+  check('聚精会神：出现技巧检定，判定区不在最开始的 120°', !!q && q.start >= (120 * Math.PI) / 180);
+  check('聚精会神：间隔 6~22 秒、转一圈 1.5 秒、完美区 18°', QTE.max === 22 && QTE.spin === 1.5 && Math.abs(QTE.great - (18 * Math.PI) / 180) < 1e-9);
+  if (q) {
+    for (let i = 0; i < 300 && q.ang < q.start + 0.02; i++) w.update(1 / 120, true);
+    w.relicFx.qtePress();
+    check('聚精会神：完美判定 +1 枚代币', q.res === 'great' && run.focusTokens === 3, `${q.res} ${run.focusTokens}`);
+    w.relicFx.qte = null;
+    w.relicFx.qteT = 0;
+    w.update(1 / 60, true);
+    const q2 = w.relicFx.qte!;
+    for (let i = 0; i < 400 && w.relicFx.qte === q2 && !q2.res; i++) w.update(1 / 60, true);
+    check('聚精会神：没有按键就是错过，代币清空', q2.res === 'miss' && run.focusTokens === 0, `${q2.res} ${run.focusTokens}`);
+  }
+}
+// 23. 第4.3次调整：曼巴僵尸倒下后爬起，进入 36 秒的耐久战
+{
+  const w = freshWorld();
+  (w as any).__god = true;
+  w.zoneStarted = false;
+  const e = w.enemies.spawnBoss(w.player.x, w.player.y + 24, 'mamba');
+  const mb = new Mamba(w, e);
+  w.boss = mb;
+  w.bossEnemy = e;
+  w.enemies.damage(e, e.maxHp * 2, null);
+  check('曼巴僵尸：生命归零时没有死亡，而是倒地并开始过场动画', !e.dead && mb.state === 'down' && !!w.cine);
+  check('曼巴僵尸：过场动画中免疫伤害', !w.enemies.damage(e, 100, null) && e.hp === 0);
+  for (let i = 0; i < Math.ceil((MAMBA_CINE.total + 0.5) * 60); i++) w.update(1 / 60, true);
+  check('过场动画结束：进入耐久战，生命条重新填满', mb.final && !w.cine && e.hp > e.maxHp * 0.9, `${mb.state} ${(e.hp / e.maxHp).toFixed(2)}`);
+  const hp1 = e.hp;
+  w.enemies.damage(e, 1e7, null);
+  check('耐久战：免疫一切伤害', !e.dead && e.hp === hp1);
+  w.run.rad = 999;
+  const php = w.run.hp;
+  for (let i = 0; i < 60; i++) w.update(1 / 60, true);
+  check('耐久战：辐射值照常上升，但不会扣血', w.run.hp === php && w.run.rad > 999, `${php} → ${w.run.hp}`);
+  for (let i = 0; i < MAMBA_CINE.finalTime * 60 + 60 && w.phase !== 'victory'; i++) w.update(1 / 60, true);
+  check('坚持到计时结束：胜利', w.phase === 'victory');
 }
 console.log(fails ? `${fails} 项失败` : '全部通过');

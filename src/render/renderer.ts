@@ -41,6 +41,10 @@ export class Renderer {
   /** 第4.1次调整：天生神力——视野 +80%（平滑过渡） */
   viewMul = 1;
   shakeAmt = 0;
+  /** 第4.3次调整：过场动画时镜头推向曼巴僵尸（0~1） */
+  cineK = 0;
+  private cineX = 0;
+  private cineY = 0;
   shakeEnabled = true;
   camX = 0;
   camY = 0;
@@ -189,7 +193,12 @@ export class Renderer {
     // —— 相机 ——
     const lx = own ? Math.max(-6, Math.min(6, (aimX - p.x) * 0.18)) : 0;
     const ly = own ? Math.max(-5, Math.min(5, (aimY - p.y) * 0.18)) : 0;
-    const tx = p.x + lx, ty = p.y + ly;
+    // 第4.3次调整：过场动画中镜头缓缓推向曼巴僵尸
+    const cb = w.cine && w.bossEnemy ? w.bossEnemy : null;
+    this.cineK += ((cb ? 1 : 0) - this.cineK) * Math.min(1, dt * (cb ? 1.6 : 2.4));
+    if (cb) { this.cineX = cb.x; this.cineY = cb.y - 1; }
+    const ck = this.cineK * this.cineK * (3 - 2 * this.cineK);
+    const tx = p.x + lx + (this.cineX - p.x - lx) * ck, ty = p.y + ly + (this.cineY - p.y - ly) * ck;
     const k = damp(7, dt);
     this.camX += (tx - this.camX) * k;
     this.camY += (ty - this.camY) * k;
@@ -199,7 +208,8 @@ export class Renderer {
     const sx = (Math.random() - 0.5) * sh, sy = (Math.random() - 0.5) * sh;
     const vm = w.run.has('might') && !w.showcase ? RELIC.mightScale : 1;
     this.viewMul += (vm - this.viewMul) * Math.min(1, dt * 2);
-    const H = 23 * this.zoom * this.viewMul, D = 12.5 * this.zoom * this.viewMul;
+    const cz = 1 - 0.42 * ck;
+    const H = 23 * this.zoom * this.viewMul * cz, D = 12.5 * this.zoom * this.viewMul * cz;
     if (this.scene.fog instanceof THREE.Fog) { this.scene.fog.near = 34 * this.viewMul; this.scene.fog.far = 82 * this.viewMul; }
     const far = 220 * Math.max(1, this.viewMul);
     if (Math.abs(this.camera.far - far) > 1) { this.camera.far = far; this.camera.updateProjectionMatrix(); }

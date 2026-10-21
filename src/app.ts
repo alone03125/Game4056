@@ -247,6 +247,7 @@ export class App {
         this.audio.music?.play('explore', Math.min(4, z));
       },
       bossStart: () => { if (!isMenu) this.audio.music?.play('boss'); },
+      cine: (on) => { if (!isMenu) this.audio.music?.play(on ? 'none' : 'boss'); },
       death: () => { if (!isMenu) { this.audio.music?.stinger('death'); this.bag.setOpen(false); } },
       victory: () => { if (!isMenu) { this.audio.music?.stinger('victory'); this.bag.setOpen(false); } },
       doorChanged: () => {},
@@ -482,6 +483,7 @@ export class App {
         const r = w.interact();
         if (r === 'altar' || r === 'shop') { this.safe.setOpen(true, r); this.audio.play('click'); }
       } else if (action === 'reload') w.player.manualReload();
+      else if (action === 'special') w.relicFx.qtePress();
       else if (action === 'autoL' || action === 'autoR') {
         const hs = w.player.hands[action === 'autoL' ? 0 : 1];
         hs.auto = !hs.auto;
@@ -632,16 +634,26 @@ export class App {
         if (pr.fancy && Math.random() < 0.25) this.renderer.particles.trail(pr.x, pr.y, 1.1, pr.fancy & 2 ? 0xffffff : 0xffe8a0);
       }
     }
+    // 第4.3次调整：曼巴僵尸耐久战时身上飘出红金色的火星
+    const be = w.bossEnemy;
+    if (running && be && !be.dead && w.boss?.final && Math.random() < 0.7) {
+      const a = Math.random() * Math.PI * 2, r = Math.random() * 1.6;
+      this.renderer.particles.trail(be.x + Math.cos(a) * r, be.y + Math.sin(a) * r, 0.6 + Math.random() * 2.6, Math.random() < 0.5 ? 0xffb020 : 0xff4a1a);
+    }
     // 叠加层
     const ov = this.overlay;
     ov.begin();
     if (running) this.ambient(dt, v.x, v.y, w.layout.cfg.palette.accent);
-    this.drawWorldUI(w);
+    // 过场动画中不显示场景里的标签与指示
+    if (!w.cine) this.drawWorldUI(w);
     ov.drawFloaters(running ? dt : 0, (x, y, hh) => this.renderer.project(x, y, hh));
     if (w.countdown >= 0) ov.countdown(w.countdown, coop ? '安全门即将开启，任何人离开黄色区域都会取消' : '安全门即将开启，离开黄色区域可取消');
-    if (w.combo.count >= 10) ov.combo(w.combo.count, w.combo.t);
+    if (w.combo.count >= 10 && !w.cine) { const ca = this.hud.comboAnchor(); ov.combo(w.combo.count, w.combo.t, ca.x, ca.y); }
+    // 第4.3次调整：聚精会神的技巧检定
+    const qte = w.relicFx.qte;
+    if (qte && p.standing) ov.qte(qte, keyLabel(this.settings.keys.special), w.run.focusTokens);
     this.drawNotices(w, paused);
-    if (playing && !this.bag.open && !this.safe.open && !this.relicUi.open && p.standing && this.input.hasMouse && !paused) {
+    if (playing && !w.cine && !this.bag.open && !this.safe.open && !this.relicUi.open && p.standing && this.input.hasMouse && !paused) {
       const r: [number, number] = [1, 1];
       for (let i = 0; i < 2; i++) {
         const hs = p.hands[i];
@@ -650,6 +662,7 @@ export class App {
       ov.crosshair(this.input.mouseX, this.input.mouseY, r, [!!w.run.guns[0], !!w.run.guns[1]], w.radLevel >= 2 ? '#ff8a6a' : '#ffffff');
     }
     // HUD
+    this.hud.setMouse(this.input.mouseX, this.input.mouseY, this.input.hasMouse && playing);
     this.hud.update(w, dt);
     const minimal = w.phase === 'safehouse' && !!w.layout.prevRoom?.minimal;
     const hintKey = `${this.settings.hints}|${w.phase === 'safehouse'}|${minimal}|${!!coop}|${JSON.stringify(this.settings.keys)}`;
@@ -739,7 +752,7 @@ export class App {
         ov.label(proj(r.suit.x, r.suit.y, 2.9), '防护服柜', suitSub, offer ? '#7affc0' : '#8d939a', offer > 0 && dsu < 1.6);
       }
       const dm = Math.hypot(p.x - r.medkit.x, p.y - r.medkit.y);
-      const full = w.run.hp >= w.run.maxHp - 0.01;
+      const full = w.run.hp >= w.medkitCap() - 0.01;
       ov.label(proj(r.medkit.x, r.medkit.y, 2.0), '医疗箱', dm < 1.6 ? (full ? '生命值已满' : `[${F}] 回满生命`) : full ? '生命值已满' : '回满生命', full ? '#8d939a' : '#ff6a7a', dm < 1.6 && !full);
     }
     this.drawQuestUI(w);

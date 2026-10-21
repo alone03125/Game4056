@@ -1,12 +1,15 @@
 // 游戏内 HUD：生命/状态、区域与辐射、小地图、双枪面板、背包指示、快捷栏、提示、Boss 血条等。
 // 第4.1次调整：辐射计量条移到左上角与生命条放在一起，区域名称、计时、丧尸强化与区域任务放到右上角小地图下方，
 // 屏幕上方中间空出来；奇物增益以小图标显示在左上角。第4.2次调整：Boss 血条仍在屏幕上方。
+// 第4.3次调整：生命条下方的输出排行（单人时为自己的详细数据）；鼠标移到任意面板上时该面板变得几乎透明；
+// 曼巴僵尸的过场动画（黑边、心跳的红光、怒吼的闪光）与耐久战的红金色计时条；奇物图标角落的数字。
 
 import { ELITE_CSS, enhanceCoef, RARITY_CSS, RECOIL, ZONES } from '../config';
 import { BULLETS, bulletName, recoilOf } from '../data/bullets';
 import { DEFAULT_KEYS, KeyAction, keyLabel } from '../core/settings';
 import { SLOT_CSS } from '../render/entities';
-import { SUIT_NAMES } from '../game/world';
+import { CINE_BEATS, SUIT_NAMES } from '../game/world';
+import { MAMBA_CINE } from '../game/mamba';
 import { Gun, GunStats, gunStats } from '../data/guns';
 import { ITEMS, QUICK_ORDER } from '../data/items';
 import { RelicId, RELICS } from '../data/relics';
@@ -30,7 +33,6 @@ interface HudSrc {
   suit: number;
   speed: number;
   recoilResist: number;
-  kills: number;
   buffs: [number, number, number];
   rad: number;
   radLevel: number;
@@ -45,6 +47,13 @@ interface HudSrc {
   relics: RelicId[];
   /** 枪械的实际数值（自己：含全局加成与奇物；观战的队友：只含过热） */
   stats(g: Gun, hand: number): GunStats;
+}
+
+/** 输出数值的紧凑写法 */
+function fmtDmg(v: number): string {
+  if (v >= 1e6) return (v / 1e6).toFixed(2) + 'M';
+  if (v >= 1e4) return (v / 1e3).toFixed(1) + 'K';
+  return String(Math.round(v));
 }
 
 function escHtml(s: string): string {
@@ -102,6 +111,17 @@ export class Hud {
   private team!: HTMLDivElement;
   private teamSig = '';
   private bagHint!: HTMLDivElement;
+  // 第4.3次调整
+  private hpOver!: HTMLDivElement;
+  private lb!: HTMLDivElement;
+  private lbSig = '';
+  private lbT = 0;
+  private fadeEls: HTMLElement[] = [];
+  private mouse = { x: -1, y: -1, on: false };
+  private cineBars!: HTMLDivElement;
+  private cineRed!: HTMLDivElement;
+  private cineFlash!: HTMLDivElement;
+  private cineSub!: HTMLDivElement;
   onBagClick: () => void = () => {};
   onQuickUse: (i: number) => void = () => {};
 
@@ -114,11 +134,19 @@ export class Hud {
     // 左上
     this.hpFill = h('div', { class: 'hp-fill' });
     this.hpLag = h('div', { class: 'hp-lag' });
+    this.hpOver = h('div', { class: 'hp-over' });
+    // 过场动画：上下黑边、心跳的红光、怒吼的闪光、字幕（第4.3次调整）
+    this.cineRed = h('div', { class: 'cine-red' });
+    this.cineFlash = h('div', { class: 'cine-flash' });
+    this.cineSub = h('div', { class: 'cine-sub' });
+    this.cineBars = h('div', { class: 'cine-bars' }, h('div', { class: 'cb t' }), h('div', { class: 'cb b' }, this.cineSub));
+    this.root.append(this.cineRed, this.cineFlash, this.cineBars);
     this.hpText = h('div', { class: 'hp-text' });
     this.statRow = h('div', { class: 'stat-row' });
     this.buffs = h('div', { class: 'buffs' });
     this.relicRow = h('div', { class: 'relic-row hidden' });
     this.team = h('div', { class: 'team hidden' });
+    this.lb = h('div', { class: 'lb panel' });
     // 辐射（第4.1次调整：放在生命条下方）
     this.radHead = h('div', { class: 'rad-head' });
     this.radFill = h('div', { class: 'rad-fill' });
@@ -134,9 +162,11 @@ export class Hud {
       radBar.appendChild(l);
     }
     this.rad = h('div', { class: 'rad' }, this.radHead, radBar);
-    this.root.append(h('div', { class: 'hud-tl' }, h('div', { class: 'panel' },
-      h('div', { class: 'hp-row' }, h('span', { style: 'font-weight:800;color:#ff6a5a;font-size:12px' }, 'HP'), h('div', { class: 'hp-bar' }, this.hpLag, this.hpFill, this.hpText)),
-      this.rad, this.statRow, this.buffs, this.relicRow), this.team));
+    const tlPanel = h('div', { class: 'panel' },
+      h('div', { class: 'hp-row' }, h('span', { style: 'font-weight:800;color:#ff6a5a;font-size:12px' }, 'HP'), h('div', { class: 'hp-bar' }, this.hpLag, this.hpFill, this.hpOver, this.hpText)),
+      this.rad, this.statRow, this.buffs, this.relicRow);
+    // 输出排行紧贴在生命面板下方，队友列表在它下面
+    this.root.append(h('div', { class: 'hud-tl' }, tlPanel, this.lb, this.team));
     // 右上：小地图，下方是区域信息与区域任务，再下方是提示消息
     this.mini = h('canvas', { class: 'minimap', width: 200, height: 250 });
     this.trStats = h('div', { class: 'tr-stats' });
@@ -144,9 +174,8 @@ export class Hud {
     this.zoneSub = h('div', { class: 'zone-sub' });
     this.quest = h('div', { class: 'quest hidden' });
     this.toasts = h('div', { class: 'toasts' });
-    this.root.append(h('div', { class: 'hud-tr' },
-      h('div', { class: 'panel tr-panel' }, this.mini, this.trStats, h('div', { class: 'zone-box' }, this.zoneName, this.zoneSub), this.quest),
-      this.toasts));
+    const trPanel = h('div', { class: 'panel tr-panel' }, this.mini, this.trStats, h('div', { class: 'zone-box' }, this.zoneName, this.zoneSub), this.quest);
+    this.root.append(h('div', { class: 'hud-tr' }, trPanel, this.toasts));
     // 左下：枪
     const bl = h('div', { class: 'hud-bl' });
     for (let i = 0; i < 2; i++) {
@@ -170,6 +199,34 @@ export class Hud {
     this.hints = h('div', { class: 'hints panel' });
     this.fps = h('div', { class: 'fps hidden' });
     this.root.append(this.banner, this.bossBar, this.hints, this.fps);
+    // 第4.3次调整：鼠标移到这些面板上时，面板变得几乎透明，不挡住视野
+    this.fadeEls = [tlPanel, this.team, this.lb, trPanel, this.toasts, ...this.gunCards, this.quick, this.bagInd, this.bossBar, this.hints];
+    for (const el of this.fadeEls) el.classList.add('fadeable');
+  }
+
+  /** 鼠标位置（用于面板的透明） */
+  setMouse(x: number, y: number, on: boolean): void {
+    this.mouse.x = x; this.mouse.y = y; this.mouse.on = on;
+  }
+
+  /** 连杀播报的位置：左侧，生命面板与枪械面板之间（第4.3次调整） */
+  comboAnchor(): { x: number; y: number } {
+    const tl = this.root.querySelector('.hud-tl')!.getBoundingClientRect();
+    const bl = this.root.querySelector('.hud-bl')!.getBoundingClientRect();
+    const top = tl.bottom + 36, bottom = bl.top - 36;
+    return { x: 24, y: bottom > top ? Math.min(bottom, Math.max(top, window.innerHeight * 0.48)) : top };
+  }
+
+  private updateFade(cine: boolean): void {
+    const m = this.mouse;
+    for (const el of this.fadeEls) {
+      let on = false;
+      if (m.on && !cine) {
+        const r = el.getBoundingClientRect();
+        on = r.width > 0 && m.x >= r.left && m.x <= r.right && m.y >= r.top && m.y <= r.bottom;
+      }
+      el.classList.toggle('peek', on);
+    }
   }
 
   show(v: boolean): void {
@@ -229,14 +286,20 @@ export class Hud {
     const src = this.source(w);
     // 生命
     const hpf = Math.max(0, src.hp / Math.max(1, src.maxHp));
-    this.hpFill.style.width = hpf * 100 + '%';
-    this.hpLag.style.width = hpf * 100 + '%';
+    this.hpFill.style.width = Math.min(1, hpf) * 100 + '%';
+    this.hpLag.style.width = Math.min(1, hpf) * 100 + '%';
+    // 精研百草：超过上限的生命以金色显示
+    this.hpOver.style.width = Math.min(1, Math.max(0, hpf - 1)) * 100 + '%';
     const hpNum = `${Math.ceil(Math.max(0, src.hp))} / ${Math.round(src.maxHp)}`;
     this.hpText.textContent = src.watching !== null
       ? (src.watching ? `观战 ${src.watching}　${src.downed ? '倒地' : hpNum}` : '阵亡（观战中）')
       : src.downed ? '倒地，等待队友拉起' : hpNum;
-    this.statRow.innerHTML = `<span>防护服 <b>${SUIT_NAMES[Math.min(5, src.suit)]}</b></span><span>移速 <b>${src.speed.toFixed(1)}</b> m/s</span><span>后坐减免 <b>${Math.round(src.recoilResist * 100)}%</b></span><span>击杀 <b>${fmtNum(src.kills)}</b></span>`;
+    this.statRow.innerHTML = `<span>防护服 <b>${SUIT_NAMES[Math.min(5, src.suit)]}</b></span><span>移速 <b>${src.speed.toFixed(1)}</b> m/s</span><span>后坐减免 <b>${Math.round(src.recoilResist * 100)}%</b></span>`;
     this.updateTeam(w);
+    this.lbT -= 1 / 30;
+    if (this.lbT <= 0) { this.lbT = 0.5; this.updateBoard(w); }
+    this.updateCine(w);
+    this.updateFade(!!w.cine);
     const bf: string[] = [];
     const [iv, oh, ee] = src.buffs;
     if (iv > 0) bf.push(`<span class="buff" style="color:#fff6d8">无敌 ${iv.toFixed(1)}s</span>`);
@@ -244,8 +307,9 @@ export class Hud {
     if (ee > 0) bf.push(`<span class="buff" style="color:#5a9aff">鳗 +160% ${ee.toFixed(1)}s</span>`);
     if (src.watching === null && w.combo.count >= 5) bf.push(`<span class="buff" style="color:#ffd24a">连杀 ×${w.combo.count}</span>`);
     if (src.watching === null && w.relicFx.shieldCd > 0) bf.push(`<span class="buff" style="color:#fff2a0">圣盾冷却 ${w.relicFx.shieldCd.toFixed(1)}s</span>`);
+    if (src.watching === null && w.relicFx.weakT > 0) bf.push(`<span class="buff" style="color:#ff9a6a">造成伤害 -30% ${w.relicFx.weakT.toFixed(1)}s</span>`);
     this.buffs.innerHTML = bf.join('');
-    this.updateRelics(src.relics);
+    this.updateRelics(src.relics, src.watching === null ? (id) => w.run.relicBadge(id) : () => null);
     // 区域
     const cfg = w.layout.cfg;
     if (w.phase === 'safehouse') {
@@ -307,7 +371,11 @@ export class Hud {
       const per = be.maxHp / total;
       const cur = Math.max(0, be.hp - per * (total - phase));
       const phaseText = total > 1 ? `　第 ${phase}/${total} 阶段` : '';
-      this.bossName.textContent = `${B.name}${B.enraged ? '（狂暴）' : ''}${phaseText}　${fmtNum(cur)} / ${fmtNum(per)}`;
+      const timer = B.timer();
+      // 第4.3次调整：耐久战中生命条变为红金色的计时条
+      this.bossBar.classList.toggle('final', B.final);
+      if (B.final) this.bossName.textContent = `${B.name}（不死）　坚持 ${Math.max(0, timer).toFixed(1)} 秒`;
+      else this.bossName.textContent = `${B.name}${B.enraged ? '（狂暴）' : ''}${phaseText}　${fmtNum(cur)} / ${fmtNum(per)}`;
       this.bossFill.style.width = Math.min(100, (cur / per) * 100) + '%';
       const sigB = `${total}|${phase}`;
       if (sigB !== this.bossSig) {
@@ -323,17 +391,71 @@ export class Hud {
     this.vignette.style.boxShadow = `inset 0 0 ${160 + lowHp * 80}px ${lowHp > 0 ? `rgba(200,0,0,${0.35 + lowHp * 0.4})` : `rgba(${radC},${radA})`}`;
   }
 
-  /** 奇物增益：小图标（悬停显示说明） */
-  private updateRelics(list: RelicId[]): void {
-    const sig = list.join(',');
+  /** 奇物增益：小图标（悬停显示说明）；友谊地久天长的层数与聚精会神的代币显示在角落 */
+  private updateRelics(list: RelicId[], badge: (id: RelicId) => number | null): void {
+    const sig = list.map((id) => `${id}:${badge(id) ?? ''}`).join(',');
     if (sig === this.relicSig) return;
     this.relicSig = sig;
     clear(this.relicRow);
     this.relicRow.classList.toggle('hidden', !list.length);
     for (const id of list) {
       const d = RELICS[id];
-      this.relicRow.appendChild(h('img', { src: relicIcon(id), title: `${d.name}：${d.desc}`, draggable: 'false' }));
+      const n = badge(id);
+      this.relicRow.appendChild(h('div', { class: 'ri', title: `${d.name}：${d.desc}` },
+        h('img', { src: relicIcon(id), draggable: 'false' }),
+        n !== null ? h('b', { style: `color:${d.color}` }, String(n)) : null));
     }
+  }
+
+  /** 输出排行（第4.3次调整）：联机时按当前区域的输出排名；单人时为自己的详细数据 */
+  private updateBoard(w: World): void {
+    const run = w.run;
+    const st = run.stats;
+    let html: string;
+    if (w.net) {
+      const me = w.net.myId;
+      const rows: { name: string; color: string; zone: number; total: number; me: boolean; dead: boolean }[] = [
+        { name: '你', color: SLOT_CSS[me % 4], zone: st.zoneDamage, total: st.damageDealt, me: true, dead: !w.player.alive },
+      ];
+      for (const r of w.net.remotes()) rows.push({ name: r.name, color: SLOT_CSS[r.slot % 4], zone: r.dmgZone, total: r.dmgTotal, me: false, dead: r.dead });
+      rows.sort((a, b) => b.zone - a.zone || b.total - a.total);
+      html = `<div class="lb-h"><span class="n">输出排行</span><span>本区</span><span>本局</span></div>`
+        + rows.map((r, i) => `<div class="lb-r${r.me ? ' me' : ''}${r.dead ? ' dead' : ''}"><i>${i + 1}</i><span class="n" style="color:${r.color}">${escHtml(r.name)}</span><span>${fmtDmg(r.zone)}</span><span>${fmtDmg(r.total)}</span></div>`).join('');
+    } else {
+      const zoneT = Math.max(1, w.zoneTime), allT = Math.max(1, st.fightTime);
+      const row = (k: string, v: string) => `<div class="lb-s"><span>${k}</span><b>${v}</b></div>`;
+      html = `<div class="lb-h"><span class="n">输出统计</span></div>`
+        + row('本区输出', fmtDmg(st.zoneDamage)) + row('本局输出', fmtDmg(st.damageDealt))
+        + row('区域 DPS', fmtDmg(st.zoneDamage / zoneT)) + row('全局 DPS', fmtDmg(st.damageDealt / allT))
+        + row('击杀', fmtNum(st.kills));
+    }
+    if (html !== this.lbSig) { this.lbSig = html; this.lb.innerHTML = html; }
+  }
+
+  /** 曼巴僵尸的过场动画（第4.3次调整） */
+  private updateCine(w: World): void {
+    const c = w.cine;
+    this.root.classList.toggle('cine', !!c);
+    if (!c) {
+      this.cineRed.style.opacity = '0';
+      this.cineFlash.style.opacity = '0';
+      this.cineSub.textContent = '';
+      return;
+    }
+    const roarAt = MAMBA_CINE.down + MAMBA_CINE.rise;
+    // 心跳：每一下都让屏幕边缘泛起红光，越来越强
+    let red = 0;
+    if (c.beat > 0) {
+      const since = c.t - CINE_BEATS[c.beat - 1];
+      red = Math.max(0, 1 - since * 2.2) * (0.35 + c.beat * 0.07);
+    }
+    if (c.t >= roarAt) red = Math.max(red, 0.75 * Math.max(0, 1 - (c.t - roarAt) / 1.8));
+    this.cineRed.style.opacity = Math.min(1, red).toFixed(3);
+    this.cineRed.classList.toggle('gold', c.t >= roarAt);
+    // 怒吼：一瞬间的红金色闪光
+    this.cineFlash.style.opacity = c.t >= roarAt ? Math.max(0, 1 - (c.t - roarAt) * 2.4).toFixed(3) : '0';
+    const sub = c.t < 0.9 ? '' : c.t < MAMBA_CINE.down ? '……' : c.t < roarAt ? '它又站起来了' : '';
+    if (this.cineSub.textContent !== sub) this.cineSub.textContent = sub;
   }
 
   /** 区域任务（小地图下方） */
@@ -378,7 +500,7 @@ export class Hud {
       const th = ZONES[Math.min(5, Math.max(1, r.suit)) - 1].radThresh;
       return {
         watching: r.name, alive: !r.dead, downed: r.downed, hp: r.hp, maxHp: r.maxHp, suit: r.suit, speed: r.speed, recoilResist: pf?.recoilResist ?? 0,
-        kills: r.kills, buffs: r.buffs, rad: r.rad, radLevel: r.rad >= th[2] ? 3 : r.rad >= th[1] ? 2 : r.rad >= th[0] ? 1 : 0, thresh: th,
+        buffs: r.buffs, rad: r.rad, radLevel: r.rad >= th[2] ? 3 : r.rad >= th[1] ? 2 : r.rad >= th[0] ? 1 : 0, thresh: th,
         gold: pf?.gold ?? 0, bank: pf?.bank ?? 0, bagUsed: pf?.bagUsed ?? 0, bagCap: pf?.bagCap ?? 16,
         guns: pf ? pf.guns : [null, null], hands: r.hands, counts: pf?.counts ?? [], relics: pf?.relics ?? [],
         stats: (g) => gunStats(g, r.buffs[1] > 0 ? 3 : 0),
@@ -386,7 +508,7 @@ export class Hud {
     }
     return {
       watching: w.net && !p.alive ? '' : null, alive: p.alive, downed: p.downed, hp: run.hp, maxHp: run.maxHp, suit: run.suit, speed: p.speed(),
-      recoilResist: run.recoilResist, kills: run.stats.kills, buffs: [run.invulnT, run.overheatT, run.eelT], rad: run.rad, radLevel: w.radLevel,
+      recoilResist: run.recoilResist, buffs: [run.invulnT, run.overheatT, run.eelT], rad: run.rad, radLevel: w.radLevel,
       thresh: w.radThresh(), gold: run.gold, bank: run.bank, bagUsed: run.bagUsed(), bagCap: run.bagCap, guns: run.guns,
       hands: p.hands.map((hs) => ({ auto: hs.auto, cursor: hs.cursor, reloading: hs.reloading, prog: hs.reloading ? 1 - Math.max(0, hs.cooldown) / Math.max(0.01, hs.reloadTotal) : 1 })),
       counts: QUICK_ORDER.map((id) => run.countItem(id)), relics: run.relics,
@@ -465,7 +587,7 @@ export class Hud {
     const rows: string[] = [];
     for (const r of net.remotes()) {
       const st = r.dead ? '阵亡' : r.downed ? '倒地' : r.arrived ? '已进入安全屋' : r.paused ? '暂停中' : '';
-      const hp = r.dead ? 0 : Math.max(0, r.hp / Math.max(1, r.maxHp));
+      const hp = r.dead ? 0 : Math.min(1, Math.max(0, r.hp / Math.max(1, r.maxHp)));
       rows.push(`<div class="tm${r.dead ? ' dead' : r.downed ? ' down' : ''}"><i style="background:${SLOT_CSS[r.slot % 4]}"></i><span class="n">${escHtml(r.name)}</span><span class="b"><span style="width:${(hp * 100).toFixed(0)}%"></span></span><span class="s">${st || `${Math.ceil(r.hp)}`}</span></div>`);
     }
     const sig = rows.join('');
@@ -571,7 +693,7 @@ export class Hud {
       g.beginPath(); g.moveTo(tx(py.x), ty(py.y) - 5); g.lineTo(tx(py.x) + 4, ty(py.y) + 3); g.lineTo(tx(py.x) - 4, ty(py.y) + 3); g.closePath(); g.stroke(); g.fill();
     }
     for (const b of q.balls) {
-      if (b.done || Math.hypot(b.x - w.view.x, b.y - w.view.y) > 26) continue;
+      if (b.done || q.done || Math.hypot(b.x - w.view.x, b.y - w.view.y) > 26) continue;
       g.fillStyle = '#ffd24a';
       g.beginPath(); g.arc(tx(b.x), ty(b.y), 3, 0, 7); g.fill();
     }

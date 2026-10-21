@@ -2,6 +2,7 @@
 // 会各自随机进行 0.7~1.4 倍偏移。数值补正在装填进枪械时改变枪械本身的数据。
 // 第4.1次调整：子弹与模块共用一个随机池，按权重抽取（未特别说明的权重都是 10）。
 // 第4.2次调整：普通子弹的权重提高到 25，稀有子弹仍为 10，让子弹比模块更容易出现；删除熔炼模块。
+// 第4.3次调整：环形弹幕、感应地雷、炸弹的攻击力降低；追踪模块对环形弹幕无效；增幅模块附带 +30° 散射。
 
 import { Rng } from '../util/rng';
 
@@ -28,6 +29,7 @@ export interface LogicFx {
   dmg?: number;
   speed?: number;
   focus?: number; // 散射减少（度）
+  spread?: number; // 散射增加（度，第4.3次调整：增幅模块）
   // —— 第4.1次调整 ——
   shine?: boolean; // 下一发变为闪耀虹彩
   loop?: boolean; // 下一发在本轮之后每一发射出时都再射出一次
@@ -44,6 +46,7 @@ export interface CastMods {
   dmg?: number;
   speed?: number;
   focus?: number;
+  spread?: number;
   shine?: boolean;
   multi?: number;
 }
@@ -127,7 +130,7 @@ export const BULLETS: Record<BulletId, BulletDef> = {
     count: 7, range: 13,
   },
   bomb: {
-    id: 'bomb', name: '炸弹', atk: 210, spd: 22, rng: 9, deg: -10, rc: 5, mods: { delay: 0.05, spread: -5 },
+    id: 'bomb', name: '炸弹', atk: 160, spd: 22, rng: 9, deg: -10, rc: 5, mods: { delay: 0.05, spread: -5 },
     effect: '向前方抛出一枚炸弹，2.5 秒后爆炸，伤害范围内的所有单位。', weight: 25,
     color: 0xff6a3a, kind: 'bomb', sfx: 'thump',
   },
@@ -177,7 +180,7 @@ export const BULLETS: Record<BulletId, BulletDef> = {
     sfx: 'saw', pierce: -1,
   },
   mine: {
-    id: 'mine', name: '感应地雷', atk: 220, spd: 10, rng: 8, deg: 0, rc: 0.3, mods: { delay: 0.12 },
+    id: 'mine', name: '感应地雷', atk: 180, spd: 10, rng: 8, deg: 0, rc: 0.3, mods: { delay: 0.12 },
     effect: '布置一枚地雷，敌人靠近时触发，片刻后爆炸。地雷最多存在 20 秒。', weight: 25, color: 0xff3a3a,
     kind: 'mine', sfx: 'thump',
   },
@@ -196,7 +199,7 @@ export const BULLETS: Record<BulletId, BulletDef> = {
     sfx: 'heavy', pierce: 10, range: 42,
   },
   nova: {
-    id: 'nova', name: '环形弹幕', atk: 24, spd: 45, rng: 3, deg: 0, rc: 0, mods: { delay: 0.08 },
+    id: 'nova', name: '环形弹幕', atk: 19, spd: 45, rng: 3, deg: 0, rc: 0, mods: { delay: 0.08 },
     effect: '向四周 360° 射出 12 发子弹，射程 14 米。', weight: 25, color: 0xc08aff, kind: 'bullet', sfx: 'zap',
     count: 12, range: 14, flags: { ring: true },
   },
@@ -248,7 +251,7 @@ export const BULLETS: Record<BulletId, BulletDef> = {
   },
   mHoming: {
     id: 'mHoming', name: '追踪模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: { delay: 0.01 },
-    effect: '逻辑模块：下一发子弹获得追踪能力。', weight: 10, color: 0xff8ae8, kind: 'bullet', sfx: 'pistol', logic: { homing: true },
+    effect: '逻辑模块：下一发子弹获得追踪能力（对环形弹幕无效）。', weight: 10, color: 0xff8ae8, kind: 'bullet', sfx: 'pistol', logic: { homing: true },
   },
   mPierce: {
     id: 'mPierce', name: '穿透模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: { delay: 0.01 },
@@ -260,7 +263,7 @@ export const BULLETS: Record<BulletId, BulletDef> = {
   },
   mPower: {
     id: 'mPower', name: '增幅模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: { delay: 0.06, reload: 0.05 },
-    effect: '逻辑模块：下一发子弹伤害 ×1.6。', weight: 10, color: 0xff5a5a, kind: 'bullet', sfx: 'pistol', logic: { dmg: 1.6 },
+    effect: '逻辑模块：下一发子弹伤害 ×1.6，散射 +30°。', weight: 10, color: 0xff5a5a, kind: 'bullet', sfx: 'pistol', logic: { dmg: 1.6, spread: 30 },
   },
   mSpeed: {
     id: 'mSpeed', name: '加速模块', atk: 0, spd: 0, rng: 0, deg: 0, rc: 0, mods: { delay: -0.02 },

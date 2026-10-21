@@ -2,6 +2,8 @@
 
 import { fmtNum } from '../util/math';
 import { PIXEL_FONT } from '../ui/font';
+import { QTE } from '../data/relics';
+import type { QteState } from '../game/relicfx';
 
 export interface ScreenPt { x: number; y: number; ok: boolean }
 
@@ -303,17 +305,160 @@ export class Overlay {
     g.stroke();
   }
 
-  combo(n: number, t: number): void {
+  /**
+   * 聚精会神的技巧检定（第4.3次调整）：屏幕中间偏下的转轮。指针从正上方顺时针转一圈，
+   * 白色为判定区，开头的金色一段为完美区；中间显示当前的专注代币数。
+   */
+  qte(q: QteState, key: string, tokens: number): void {
+    const g = this.g;
+    const TAU = Math.PI * 2;
+    // 第4.3次调整（续）：转轮整体放大约 30%
+    const R = 60;
+    const cx = this.w / 2, cy = this.h * 0.7;
+    // 角度从正上方开始顺时针
+    const A = (a: number) => a - Math.PI / 2;
+    g.save();
+    g.translate(cx, cy);
+    if (q.t < 0) {
+      // 提示音之后、转轮出现之前：向内收拢的提示圈
+      const k = 1 + q.t / QTE.lead;
+      g.globalAlpha = 0.2 + 0.5 * k;
+      g.strokeStyle = '#4ad8ff';
+      g.lineWidth = 2 + k * 2;
+      g.beginPath();
+      g.arc(0, 0, R * (1.8 - 0.8 * k), 0, TAU);
+      g.stroke();
+      g.restore();
+      return;
+    }
+    const res = q.res;
+    const pop = res ? 1 + Math.max(0, 0.16 - q.resT) * 1.2 : Math.min(1, 0.72 + q.t * 3.5);
+    g.globalAlpha = res ? Math.max(0, 1 - Math.max(0, q.resT - QTE.show * 0.45) / (QTE.show * 0.55)) : 1;
+    g.scale(pop, pop);
+    // 底盘
+    const grd = g.createRadialGradient(0, 0, R * 0.2, 0, 0, R + 18);
+    grd.addColorStop(0, 'rgba(6,14,18,0.88)');
+    grd.addColorStop(0.72, 'rgba(6,14,18,0.72)');
+    grd.addColorStop(1, 'rgba(6,14,18,0)');
+    g.fillStyle = grd;
+    g.beginPath();
+    g.arc(0, 0, R + 18, 0, TAU);
+    g.fill();
+    // 刻度与外圈
+    for (let i = 0; i < 36; i++) {
+      const a = A((i / 36) * TAU);
+      const r0 = i % 3 === 0 ? R - 10 : R - 5;
+      g.strokeStyle = i % 3 === 0 ? 'rgba(190,235,250,0.45)' : 'rgba(190,235,250,0.22)';
+      g.lineWidth = i % 3 === 0 ? 2 : 1;
+      g.beginPath();
+      g.moveTo(Math.cos(a) * r0, Math.sin(a) * r0);
+      g.lineTo(Math.cos(a) * R, Math.sin(a) * R);
+      g.stroke();
+    }
+    g.strokeStyle = 'rgba(190,235,250,0.6)';
+    g.lineWidth = 2;
+    g.beginPath();
+    g.arc(0, 0, R + 4, 0, TAU);
+    g.stroke();
+    // 判定区（白）与开头的完美区（金）
+    g.lineCap = 'butt';
+    g.shadowColor = '#4ad8ff';
+    g.shadowBlur = 10;
+    g.strokeStyle = '#eaf8ff';
+    g.lineWidth = 10;
+    g.beginPath();
+    g.arc(0, 0, R - 1, A(q.start + QTE.great), A(q.start + QTE.width));
+    g.stroke();
+    g.shadowColor = '#ffb020';
+    g.strokeStyle = '#ffd24a';
+    g.lineWidth = 15;
+    g.beginPath();
+    g.arc(0, 0, R - 1, A(q.start), A(q.start + QTE.great));
+    g.stroke();
+    g.shadowBlur = 0;
+    // 指针扫过的残影
+    const ang = q.ang;
+    const trail = Math.min(ang, 1.1);
+    for (let i = 0; i < 6; i++) {
+      const a1 = ang - (trail * i) / 6, a0 = ang - (trail * (i + 1)) / 6;
+      if (a1 <= 0) break;
+      g.fillStyle = `rgba(255,60,40,${(0.2 * (1 - i / 6)).toFixed(3)})`;
+      g.beginPath();
+      g.moveTo(0, 0);
+      g.arc(0, 0, R - 8, A(Math.max(0, a0)), A(a1));
+      g.closePath();
+      g.fill();
+    }
+    // 指针
+    const col = res === 'great' ? '#ffd24a' : res === 'good' ? '#eaf8ff' : '#ff4a3a';
+    const na = A(ang);
+    g.lineCap = 'round';
+    g.strokeStyle = 'rgba(0,0,0,0.85)';
+    g.lineWidth = 9;
+    g.beginPath();
+    g.moveTo(Math.cos(na) * 18, Math.sin(na) * 18);
+    g.lineTo(Math.cos(na) * (R + 12), Math.sin(na) * (R + 12));
+    g.stroke();
+    g.strokeStyle = col;
+    g.lineWidth = 4;
+    g.shadowColor = col;
+    g.shadowBlur = 10;
+    g.stroke();
+    g.shadowBlur = 0;
+    // 结果：外圈闪一下
+    if (res) {
+      g.strokeStyle = col;
+      g.globalAlpha *= Math.max(0, 1 - q.resT * 2.5);
+      g.lineWidth = 4;
+      g.beginPath();
+      g.arc(0, 0, R + 6 + q.resT * 40, 0, TAU);
+      g.stroke();
+      g.globalAlpha = Math.max(0, 1 - Math.max(0, q.resT - QTE.show * 0.45) / (QTE.show * 0.55));
+    }
+    // 中心：专注代币数
+    g.fillStyle = '#0a1418';
+    g.beginPath();
+    g.arc(0, 0, 19, 0, TAU);
+    g.fill();
+    g.strokeStyle = '#4ad8ff';
+    g.lineWidth = 2;
+    g.stroke();
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+    g.font = `24px ${PIXEL_FONT}`;
+    g.fillStyle = '#bff4ff';
+    g.fillText(String(tokens), 0, 1);
+    // 按键提示 / 判定结果
+    g.lineWidth = 4;
+    g.strokeStyle = 'rgba(0,0,0,0.8)';
+    if (!res) {
+      g.font = `12px ${PIXEL_FONT}`;
+      const s = `按 ${key}`;
+      g.strokeText(s, 0, R + 24);
+      g.fillStyle = '#eaf8ff';
+      g.fillText(s, 0, R + 24);
+    } else {
+      g.font = `24px ${PIXEL_FONT}`;
+      const s = res === 'great' ? '完美' : res === 'good' ? '普通' : '错过';
+      const y = -R - 26 - q.resT * 16;
+      g.strokeText(s, 0, y);
+      g.fillStyle = col;
+      g.fillText(s, 0, y);
+    }
+    g.restore();
+  }
+
+  /** 连杀播报（第4.3次调整：移到屏幕左侧，x / y 为左对齐的位置） */
+  combo(n: number, t: number, x: number, y: number): void {
     if (n < 10) return;
     const g = this.g;
-    g.textAlign = 'right';
+    g.textAlign = 'left';
     g.textBaseline = 'middle';
     const pulse = 1 + Math.max(0, t - 2.3) * 0.8;
     g.font = `${Math.round(36 * pulse)}px ${PIXEL_FONT}`;
     g.lineWidth = 5;
     g.strokeStyle = 'rgba(0,0,0,0.75)';
     const s = `${fmtNum(n)} 连杀`;
-    const x = this.w - 24, y = this.h * 0.42;
     g.globalAlpha = Math.min(1, t / 0.6);
     g.strokeText(s, x, y);
     g.fillStyle = n >= 100 ? '#ff5a3a' : n >= 50 ? '#ffb03a' : '#ffe08a';

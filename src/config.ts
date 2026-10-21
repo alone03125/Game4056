@@ -7,7 +7,7 @@ export interface ZoneCfg {
   index: number; // 1..6（5 = 尸王广场，6 = 隐秘核心）
   name: string;
   subtitle: string;
-  hpMul: [number, number]; // 区域倍率
+  hpMul: [number, number]; // 区域倍率（丧尸生命值的额外乘区；第4.3次调整提高了第二区起的倍率）
   weights: Record<EnemyType, number>; // 生成权重（第4次调整：苦力怕在每一区都挤占社畜丧尸 3 点权重）
   elite: [number, number, number]; // 黄/橙/红 变异概率
   eliteMin: number; // 精英最少数量
@@ -59,7 +59,7 @@ export const ZONES: ZoneCfg[] = [
   },
   {
     index: 2, name: '第二区', subtitle: '锈蚀工业带',
-    hpMul: [1.0, 2.0],
+    hpMul: [1.4, 2.4],
     weights: { office: 52, iron: 20, runner: 25, spitter: 0, creeper: 3 },
     elite: [0.099, 0.037, 0.018], eliteMin: 14,
     radRate: 0.2, radThresh: [40, 48, 52],
@@ -74,7 +74,7 @@ export const ZONES: ZoneCfg[] = [
   },
   {
     index: 3, name: '第三区', subtitle: '沉默医院区',
-    hpMul: [1.5, 2.5],
+    hpMul: [2.2, 4.5],
     weights: { office: 42, iron: 20, runner: 25, spitter: 10, creeper: 3 },
     elite: [0.109, 0.047, 0.024], eliteMin: 18,
     radRate: 0.3, radThresh: [80, 96, 104],
@@ -89,7 +89,7 @@ export const ZONES: ZoneCfg[] = [
   },
   {
     index: 4, name: '第四区', subtitle: '血色中枢',
-    hpMul: [2.0, 4.0],
+    hpMul: [3.0, 6.0],
     weights: { office: 32, iron: 20, runner: 25, spitter: 20, creeper: 3 },
     elite: [0.15, 0.06, 0.04], eliteMin: 22,
     radRate: 0.4, radThresh: [120, 144, 156],
@@ -104,7 +104,7 @@ export const ZONES: ZoneCfg[] = [
   },
   {
     index: 5, name: '第五区', subtitle: '尸王广场',
-    hpMul: [2.0, 4.0],
+    hpMul: [4.0, 6.0],
     weights: { office: 32, iron: 20, runner: 25, spitter: 20, creeper: 3 },
     elite: [0.08, 0.03, 0.01], eliteMin: 4,
     // 第3次调整：radThresh 同时是 V 级防护服（4 区安全屋提供）的阈值：黄 0（第五区始终处于黄色级别）/ 橙 200 / 红 240
@@ -121,7 +121,7 @@ export const ZONES: ZoneCfg[] = [
   {
     // 第3次调整：在辐射进入橙色之前击败牢大丧尸才能到达。辐射每秒 +0.6K，阈值与 V 级防护服相同
     index: 6, name: '第六区', subtitle: '隐秘核心',
-    hpMul: [2.2, 4.4],
+    hpMul: [5.0, 6.0],
     weights: { office: 27, iron: 22, runner: 26, spitter: 22, creeper: 3 },
     elite: [0.12, 0.05, 0.025], eliteMin: 8,
     radRate: 0.6, radThresh: [0, 200, 240],
@@ -214,8 +214,8 @@ export const GLOBAL_ATK_MAX = 1.6;
 /** 第4.1次调整：异变体（区域任务“击杀异变体”）——生命 ×24、攻击 ×4、移速 ×0.8，不会被回收；金币 ×8（自定） */
 export const MUTANT = { hp: 24, atk: 4, speed: 0.8, gold: 8 };
 
-/** 第4.1次调整：奇物宝箱的生命值（按所在区域：第二 ~ 第五区） */
-export const CHEST_HP = [0, 0, 500, 1000, 2000, 3000];
+/** 第4.1次调整：奇物宝箱的生命值（按所在区域：第二 ~ 第五区；第4.3次调整提高） */
+export const CHEST_HP = [0, 0, 2000, 3500, 6500, 10000];
 export const CHEST_R = 0.95;
 
 /** 防护服最高等级（第3次调整：4 区安全屋也提供一次升级，最高 V 级） */

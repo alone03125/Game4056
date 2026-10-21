@@ -223,7 +223,7 @@ export class Coop implements NetHooks {
         const b = w.boss;
         this.qAll.push({
           k: 'bs', s: b.stateIndex(), an: b.anim, en: b.enraged ? 1 : 0, tp: r2(b.throwPose),
-          tl: b.telegraphs.map(encodeTele),
+          tl: b.telegraphs.map(encodeTele), fn: b.final ? 1 : 0,
         });
       }
     }
@@ -244,6 +244,7 @@ export class Coop implements NetHooks {
       su: run.suit, mv: r2(p.moving), ft: [r2(Math.min(9, p.hands[0].firingT)), r2(Math.min(9, p.hands[1].firingT))],
       rl: [p.hands[0].reloading ? 1 : 0, p.hands[1].reloading ? 1 : 0], pz: this.localPaused ? 1 : 0, iv: run.invulnT > 0 ? 1 : 0,
       rad: r1(run.rad), kl: run.stats.kills, rv: w.reviveTarget, rk: r2(w.reviveT),
+      dt: Math.round(run.stats.damageDealt), dz: Math.round(run.stats.zoneDamage),
       sp: r1(p.speed()), bt: [r1(run.invulnT), r1(run.overheatT), r1(run.eelT)],
       hd: p.hands.map((h) => [h.auto ? 1 : 0, h.cursor, h.reloading ? 1 : 0, r2(h.reloading ? 1 - Math.max(0, h.cooldown) / Math.max(0.01, h.reloadTotal) : 1)]),
     };
@@ -432,7 +433,7 @@ export class Coop implements NetHooks {
         w.applyWorldState(ev.cd, ev.ct, String(ev.info ?? ''), ev.zt);
         if (Array.isArray(ev.q)) w.quests.applyNet(ev.q);
         break;
-      case 'bs': if (from === this.hostId && w.boss?.mirror) w.boss.applyState(ev.s, ev.an, !!ev.en, ev.tp, ev.tl); break;
+      case 'bs': if (from === this.hostId && w.boss?.mirror) w.boss.applyState(ev.s, ev.an, !!ev.en, ev.tp, ev.tl, ev.fn); break;
       case 'fx': if (from === this.hostId) w.applyFx(ev.n, ev.a); break;
       case 'claim':
         if (!this.isHost) break;
@@ -463,6 +464,8 @@ export class Coop implements NetHooks {
     if (s.ft[1] < r.firingT[1]) r.firingT[1] = s.ft[1];
     r.reloading = [!!s.rl[0], !!s.rl[1]];
     r.paused = !!s.pz; r.invuln = !!s.iv; r.rad = s.rad; r.kills = s.kl;
+    if (typeof s.dt === 'number') r.dmgTotal = s.dt;
+    if (typeof s.dz === 'number') r.dmgZone = s.dz;
     r.reviveBy = s.rv; r.reviveK = s.rk;
     if (typeof s.sp === 'number') r.speed = s.sp;
     if (Array.isArray(s.bt)) r.buffs = [s.bt[0], s.bt[1], s.bt[2]];
@@ -496,7 +499,7 @@ function makeRemote(id: number, name: string): RemotePlayer {
   return {
     id, name, slot: id, x: 0, y: 0, vx: 0, vy: 0, face: Math.PI / 2, hp: 100, maxHp: 100, downed: false, dead: false, arrived: false,
     suit: 1, moving: 0, walkPhase: 0, firingT: [9, 9], reloading: [false, false], looks: [null, null], lookRarity: [0, 0],
-    invuln: false, paused: false, rad: 0, kills: 0, tx: 0, ty: 0, tf: Math.PI / 2, stamp: 0, hurtT: 0, reviveBy: -1, reviveK: 0,
+    invuln: false, paused: false, rad: 0, kills: 0, dmgTotal: 0, dmgZone: 0, tx: 0, ty: 0, tf: Math.PI / 2, stamp: 0, hurtT: 0, reviveBy: -1, reviveK: 0,
     speed: 4, buffs: [0, 0, 0], hands: [{ auto: false, cursor: 0, reloading: false, prog: 1 }, { auto: false, cursor: 0, reloading: false, prog: 1 }], prof: null,
   };
 }

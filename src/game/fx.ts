@@ -6,7 +6,9 @@ export type SoundName =
   | 'hit' | 'kill' | 'coin' | 'pickup' | 'pickupBig' | 'hurt' | 'explosion' | 'smallExplosion' | 'reload'
   | 'spit' | 'splat' | 'door' | 'beep' | 'beepHigh' | 'heal' | 'buff' | 'bossRoar' | 'bossDash' | 'bossThrow'
   | 'bossSlam' | 'zap' | 'empty' | 'denied' | 'buy' | 'altar' | 'groan' | 'step' | 'ricochet' | 'drop'
-  | 'mineArm' | 'vortex' | 'victory' | 'death' | 'click' | 'hover' | 'countdown' | 'bossLaser' | 'bossWave' | 'fuse';
+  | 'mineArm' | 'vortex' | 'victory' | 'death' | 'click' | 'hover' | 'countdown' | 'bossLaser' | 'bossWave' | 'fuse'
+  // 第4.3次调整：曼巴僵尸的过场动画、聚精会神的技巧检定
+  | 'heartbeat' | 'rageRoar' | 'qteAlert' | 'qteGreat' | 'qteGood' | 'qteMiss';
 
 export interface Fx {
   shoot(x: number, y: number, angle: number, def: BulletDef, hand: number): void;

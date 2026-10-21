@@ -1,5 +1,6 @@
 // 图鉴里的敌人、区域任务与奇物图标（第4.2次调整）：和子弹图标一样用 Canvas 程序化绘制——
 // 背景光 + 带黑色描边的简单造型。奇物图标另有深色底和彩色边框，在 HUD 上缩小成 24 像素也能分辨。
+// 第4.3次调整：新增精研百草、友谊地久天长、聚精会神的图标。
 
 import { RelicId, RELICS } from '../data/relics';
 import type { QuestId } from '../game/quest';
@@ -671,6 +672,84 @@ export function relicIcon(id: RelicId): string {
         g.fill();
         for (const [x, y, r] of [[46, 40, 4], [50, 30, 2.6], [16, 44, 3]]) { circ(g, x, y, r); fs(g, '#9aff4a', 1.4); }
         break;
+      case 'herb': { // 精研百草：药碾里长出的草药，上方是溢出的爱心
+        for (const [x, y, rot] of [[24, 30, -0.6], [32, 26, 0], [40, 30, 0.6]] as const) {
+          g.save();
+          g.translate(x, y);
+          g.rotate(rot);
+          g.beginPath();
+          g.moveTo(0, 12);
+          g.bezierCurveTo(9, 4, 8, -8, 0, -14);
+          g.bezierCurveTo(-8, -8, -9, 4, 0, 12);
+          g.closePath();
+          fs(g, lin(g, -8, 0, 8, 0, '#4ab83a', '#b8ff8a'), 2);
+          stroke(g, '#2a6a1a', 1, 0, 10, 0, -10);
+          g.restore();
+        }
+        g.beginPath();
+        g.moveTo(12, 38);
+        g.lineTo(52, 38);
+        g.quadraticCurveTo(50, 56, 32, 57);
+        g.quadraticCurveTo(14, 56, 12, 38);
+        g.closePath();
+        fs(g, lin(g, 0, 38, 0, 57, '#a89a8a', '#5a5048'));
+        g.beginPath();
+        g.ellipse(32, 38, 20, 4, 0, 0, TAU);
+        fs(g, '#3a3430', 2);
+        heart(g, 50, 13, 8);
+        fs(g, lin(g, 0, 5, 0, 22, '#ff8a9a', '#d02a3a'), 2);
+        sparkle(g, 58, 5, 4, '#fff6c0');
+        break;
+      }
+      case 'friend': { // 友谊地久天长：扣在一起的两个环与爱心
+        for (const [x, color] of [[24, '#ff9ac8'], [40, '#ffd24a']] as const) {
+          circ(g, x, 36, 13);
+          g.lineWidth = 9;
+          g.strokeStyle = OUT;
+          g.stroke();
+          g.lineWidth = 6;
+          g.strokeStyle = color;
+          g.stroke();
+        }
+        // 让粉色的环压在金色的环上方，显得扣在一起
+        g.beginPath();
+        g.arc(24, 36, 13, -0.55, 0.55);
+        g.lineWidth = 9;
+        g.strokeStyle = OUT;
+        g.stroke();
+        g.lineWidth = 6;
+        g.strokeStyle = '#ff9ac8';
+        g.stroke();
+        heart(g, 32, 14, 8);
+        fs(g, lin(g, 0, 6, 0, 22, '#ffc0dc', '#ff4a8a'), 2);
+        sparkle(g, 12, 14, 4, '#ffffff');
+        sparkle(g, 53, 56, 3.5, '#ffffff');
+        break;
+      }
+      case 'focus': { // 聚精会神：技巧检定的转轮（判定区、完美区与指针）
+        circ(g, 32, 33, 22);
+        g.fillStyle = '#0a1a22';
+        g.fill();
+        g.lineWidth = 3;
+        g.strokeStyle = 'rgba(190,235,250,0.6)';
+        g.stroke();
+        g.lineCap = 'butt';
+        g.beginPath();
+        g.arc(32, 33, 19, 0.35, 1.3);
+        g.lineWidth = 6;
+        g.strokeStyle = '#eaf8ff';
+        g.stroke();
+        g.beginPath();
+        g.arc(32, 33, 19, 0.05, 0.38);
+        g.lineWidth = 9;
+        g.strokeStyle = '#ffd24a';
+        g.stroke();
+        stroke(g, '#ff4a3a', 3, 32, 33, 32 + Math.cos(0.2) * 25, 33 + Math.sin(0.2) * 25);
+        circ(g, 32, 33, 6);
+        fs(g, '#4ad8ff', 2);
+        sparkle(g, 14, 12, 5, '#bff4ff');
+        break;
+      }
     }
   });
 }

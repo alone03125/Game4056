@@ -22,8 +22,8 @@ export interface DmgSrc {
   gold?: boolean;
   burnDps?: number;
   slow?: boolean;
-  corrode?: boolean; // 腐蚀疗法：3 秒内受到的伤害 +40%
-  execute?: boolean; // 要害一击：暴击直接击杀普通丧尸
+  corrode?: boolean; // 腐蚀疗法：3 秒内受到的伤害 +25%
+  execute?: boolean; // 要害一击：第 3 次暴击直接击杀普通丧尸
   pre?: boolean; // 联机：伤害已经计算过腐蚀加成
 }
 
@@ -101,7 +101,8 @@ export interface Enemy {
   fuseKill: boolean; // 苦力怕是被打死后才开始倒计时（决定金币）
   boom: number; // 苦力怕爆炸对玩家的伤害
   mutant: boolean; // 第4.1次调整：异变体
-  corrodeT: number; // 第4.1次调整：腐蚀（受到的伤害 +40%）
+  corrodeT: number; // 第4.1次调整：腐蚀（受到的伤害 +25%，第4.3次调整）
+  critN: number; // 第4.3次调整：被本地玩家暴击命中的次数（要害一击：普通丧尸 3 次直接击杀）
 }
 
 export const TYPE_CODE: (EnemyType | 'boss' | 'chest')[] = ['office', 'iron', 'runner', 'spitter', 'boss', 'creeper', 'chest'];
@@ -151,8 +152,17 @@ export class Enemies {
   /** 黑曜羽毛：累计造成伤害的次数 */
   private featherN = 0;
   private procing = false;
+  /** “免疫”跳字的间隔（第4.3次调整：曼巴僵尸的耐久战） */
+  private immuneT = 0;
 
   constructor(private w: World) {}
+
+  /** 参与碰撞检测的敌人：跃起在空中的曼巴僵尸不会被子弹、爆炸与追踪命中（第4.3次调整） */
+  private hashList(): Enemy[] {
+    const b = this.w.boss;
+    if (!b || !b.airborne()) return this.list;
+    return this.list.filter((x) => x !== b.e);
+  }
 
   reset(): void {
     for (const e of this.list) this.pool.push(e);
@@ -174,7 +184,7 @@ export class Enemies {
       speed: 1, atk: 1, gold: 1, elite: 0, hitCd: 0, flash: 0, slowT: 0, burnT: 0, burnDps: 0, burnTick: 0, phase: 0,
       face: 0, spitCd: 0, dmgAcc: 0, dmgTimer: 0, goldBonus: false, age: 0, strafe: 1, stuckT: 0, lastX: 0, lastY: 0, recycle: true, windup: 0,
       lastBy: 0, burnBy: 0, sx: 0, sy: 0, svx: 0, svy: 0, sface: 0, stime: 0, shp: 1, predT: 0,
-      stunT: 0, fuse: -1, fuseKill: false, boom: 0, mutant: false, corrodeT: 0,
+      stunT: 0, fuse: -1, fuseKill: false, boom: 0, mutant: false, corrodeT: 0, critN: 0,
     };
   }
 
@@ -243,7 +253,7 @@ export class Enemies {
     e.lastBy = this.w.myId; e.burnBy = this.w.myId; e.predT = 0;
     e.stunT = 0; e.fuse = -1; e.fuseKill = false;
     e.boom = creeperBoomDmg(elite, cfg, w.run.difficulty);
-    e.mutant = false; e.corrodeT = 0;
+    e.mutant = false; e.corrodeT = 0; e.critN = 0;
     if (elite) this.eliteCount++;
     this.list.push(e);
     this.byId.set(e.id, e);
@@ -274,7 +284,7 @@ export class Enemies {
     e.phase = 0; e.face = 0; e.spitCd = 0; e.dmgAcc = 0; e.dmgTimer = 0; e.goldBonus = false; e.age = 0;
     e.strafe = 1; e.stuckT = 0; e.lastX = x; e.lastY = y; e.recycle = false; e.windup = 0;
     e.lastBy = this.w.myId; e.burnBy = this.w.myId; e.predT = 0;
-    e.stunT = 0; e.fuse = -1; e.fuseKill = false; e.boom = 0; e.mutant = false; e.corrodeT = 0;
+    e.stunT = 0; e.fuse = -1; e.fuseKill = false; e.boom = 0; e.mutant = false; e.corrodeT = 0; e.critN = 0;
     this.list.push(e);
     this.byId.set(e.id, e);
     return e;
@@ -310,7 +320,7 @@ export class Enemies {
     e.phase = 0; e.face = -Math.PI / 2; e.spitCd = 0; e.dmgAcc = 0; e.dmgTimer = 0; e.goldBonus = false; e.age = 0;
     e.strafe = 1; e.stuckT = 0; e.lastX = x; e.lastY = y;
     e.lastBy = this.w.myId; e.burnBy = this.w.myId; e.predT = 0; e.windup = 0; e.recycle = false;
-    e.stunT = 0; e.fuse = -1; e.fuseKill = false; e.boom = 0; e.mutant = false; e.corrodeT = 0;
+    e.stunT = 0; e.fuse = -1; e.fuseKill = false; e.boom = 0; e.mutant = false; e.corrodeT = 0; e.critN = 0;
     this.list.push(e);
     this.byId.set(e.id, e);
     return e;
@@ -393,13 +403,14 @@ export class Enemies {
 
   update(dt: number): void {
     const w = this.w;
+    if (this.immuneT > 0) this.immuneT -= dt;
     if (!w.isAuthority) { this.updateMirror(dt); return; }
     const cfg = w.layout.cfg;
     const spawning = w.spawningActive();
     const T = w.targets;
     const coopMul = COOP_COUNT_MUL[this.coopN()];
 
-    this.hash.rebuild(this.list);
+    this.hash.rebuild(this.hashList());
 
     // —— 个体生成：每个玩家周围分别判断“敌人过少 / 过多”，刷怪点优先选在缺怪的玩家附近 ——
     if (spawning && T.length) {
@@ -651,7 +662,7 @@ export class Enemies {
         }
       } else if (e.windup > 0) e.windup = Math.max(0, e.windup - dt * 2);
     }
-    this.hash.rebuild(this.list);
+    this.hash.rebuild(this.hashList());
     this.groan(dt);
     this.updateShots(dt);
   }
@@ -685,7 +696,7 @@ export class Enemies {
       }
       e.hp = hp; e.maxHp = maxHp; e.flash = 0; e.slowT = 0; e.burnT = 0; e.predT = 0; e.stunT = 0; e.fuse = -1;
       e.phase = globalRng.range(0, 6.28); e.face = face; e.dmgAcc = 0; e.dmgTimer = 0;
-      e.lastBy = -1; e.burnBy = -1; e.gold = 0; e.hitCd = 0.3; e.windup = 0; e.corrodeT = 0;
+      e.lastBy = -1; e.burnBy = -1; e.gold = 0; e.hitCd = 0.3; e.windup = 0; e.corrodeT = 0; e.critN = 0;
       this.byId.set(id, e);
       this.list.push(e);
       if (type === 'boss') w.onBossMirror(e);
@@ -693,7 +704,8 @@ export class Enemies {
     e.sx = x; e.sy = y; e.svx = vx; e.svy = vy; e.sface = face; e.stime = w.time;
     e.shp = hp;
     e.maxHp = maxHp;
-    if (e.predT <= 0) e.hp = Math.min(e.hp, hp);
+    if (type === 'boss' && w.boss?.final) e.hp = hp;
+    else if (e.predT <= 0) e.hp = Math.min(e.hp, hp);
     if (flags & 4) e.burnT = Math.max(e.burnT, 0.3);
     if (flags & 8) e.slowT = Math.max(e.slowT, 0.3);
     if (flags & 32) e.stunT = Math.max(e.stunT, 0.3);
@@ -845,13 +857,21 @@ export class Enemies {
     if (e.type === 'creeper' && e.fuseKill) return false;
     const who = by ?? w.myId;
     const mine = who === w.myId;
-    // 第4.1次调整：腐蚀（受到的伤害 +40%，这一击本身不算）；要害一击直接击杀普通丧尸
+    // 第4.3次调整：曼巴僵尸倒下后再次爬起，进入耐久战时免疫一切伤害
+    if (e.type === 'boss' && w.boss?.immune()) {
+      if (mine && color !== '#ff8a3a' && this.immuneT <= 0) { this.immuneT = 0.35; w.fx.floatText(e.x, e.y, '免疫', '#ffd24a'); }
+      return false;
+    }
+    // 第4.3次调整：圣盾触发后 5 秒内，自己造成的伤害 -30%
+    if (mine && !src?.pre) amount *= w.relicFx.dmgMul();
+    // 第4.1次调整：腐蚀（受到的伤害 +25%，这一击本身不算）；要害一击直接击杀普通丧尸
     if (e.corrodeT > 0 && !src?.pre) amount *= RELIC.corrodeMul;
     if (src?.execute) amount = Math.max(amount, e.hp);
     if (src?.corrode) e.corrodeT = RELIC.corrodeTime;
     const dealt = Math.min(e.hp, amount);
     if (mine) {
       w.run.stats.damageDealt += dealt;
+      w.run.stats.zoneDamage += dealt;
       if (w.settings.damageNumbers) {
         if (color) w.fx.damageNumber(e.x, e.y, amount, color, false);
         else {
@@ -871,13 +891,18 @@ export class Enemies {
         | (src?.corrode ? DMG_CORRODE : 0) | (src?.execute ? DMG_EXEC : 0) | DMG_PRE;
       w.net!.enemyDamage(e, amount, flags, src?.burnDps ?? 0);
       // 苦力怕被打死后还会倒计时 2 秒再爆炸，不做“预判死亡”
-      if (e.hp <= 0 && e.type !== 'creeper') { e.dead = true; e.predT = 0.6; }
+      if (e.hp <= 0 && e.type !== 'creeper' && e.type !== 'boss') { e.dead = true; e.predT = 0.6; }
+      if (e.type === 'boss') e.hp = Math.max(0, e.hp);
       if (e.type === 'creeper') e.hp = Math.max(0, e.hp);
       return false;
     }
     e.hp -= amount;
     e.lastBy = who;
-    if (e.type === 'boss') w.boss?.onDamaged(e, amount);
+    if (e.type === 'boss') {
+      w.boss?.onDamaged(e, amount);
+      // 第4.3次调整：曼巴僵尸第一次倒下时不会死亡，而是进入过场动画
+      if (e.hp <= 0 && w.boss?.preventDeath()) return false;
+    }
     if (e.type === 'creeper' && e.hp <= 0) {
       e.hp = 0;
       if (src?.gold) e.goldBonus = true;

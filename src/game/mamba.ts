@@ -2,6 +2,8 @@
 // 24 万生命，攻击力高于牢大丧尸。技能：旋转激光、冲击波（玩家太近时强制击退）、
 // 投石（范围更大的连续投掷）、冲撞（狂暴后连续冲撞），并且每损失 1/5 生命召唤一批精英丧尸。
 // 与牢大一样，AI 只在单人 / 房主处运行，其他玩家处于镜像模式。
+// 第4.3次调整：生命归零时先倒地，过场动画中再次爬起并狂暴，进入 36 秒的耐久战——
+// 免疫一切伤害，生命条变为红金色的计时条，并解锁新技能“跃起”（锁定玩家后从天而降）。坚持到计时结束即获胜。
 
 import { MAMBA } from '../config';
 import { clamp, damp, wrapAngle } from '../util/math';
@@ -13,10 +15,19 @@ import type { World } from './world';
 
 export type MambaState =
   | 'intro' | 'chase' | 'windCharge' | 'charge' | 'recover' | 'windThrow' | 'barrage'
-  | 'windLaser' | 'laser' | 'windWave' | 'summon' | 'stunned';
+  | 'windLaser' | 'laser' | 'windWave' | 'summon' | 'stunned'
+  // 第4.3次调整：倒地 → 爬起 → 怒吼（过场动画），以及跃起
+  | 'down' | 'rise' | 'roar' | 'windLeap' | 'leap' | 'land';
 export const MAMBA_STATES: MambaState[] = [
   'intro', 'chase', 'windCharge', 'charge', 'recover', 'windThrow', 'barrage', 'windLaser', 'laser', 'windWave', 'summon', 'stunned',
+  'down', 'rise', 'roar', 'windLeap', 'leap', 'land',
 ];
+
+/**
+ * 第4.3次调整：倒地后的过场动画（秒）。down = 倒在地上（心跳声越来越快），rise = 爬起，roar = 怒吼、生命条重新填满。
+ * 世界的过场动画（镜头、黑边、音效）与这里的时间一致，total 之后进入耐久战。
+ */
+export const MAMBA_CINE = { down: 2.4, rise: 1.5, roar: 2.3, total: 6.2, finalTime: 36 };
 
 /** 技能参数（自定） */
 const SK = {
@@ -27,10 +38,21 @@ const SK = {
   laserHalfW: 0.6,
   rockAoe: 3.6, // 牢大为 2.4
   summonAt: [0.8, 0.6, 0.4, 0.2],
+  // 跃起（第4.3次调整）：预警 1.7 秒（投石为 0.85~1.15 秒），范围半径 6.4 米（投石为 3.6 米）
+  leapWind: 0.5, // 下蹲蓄力
+  leapAir: 1.7, // 起跳到落地的时间，也就是红圈的预警时间
+  leapAim: 0.8, // 前 0.8 秒红圈跟着目标玩家移动，之后锁定
+  leapR: 6.4,
+  leapDmg: 0.9, // × 攻击力（投石为 0.55）
+  leapKnock: 18,
+  leapH: 11, // 跃起的最大高度（米，渲染用）
 };
+
+export { SK as MAMBA_SKILL };
 
 const tmpV = { x: 0, y: 0 };
 const tmpP = { x: 0, y: 0 };
+const CINE_STATES = new Set<MambaState>(['down', 'rise', 'roar']);
 
 export class Mamba implements BossAI {
   readonly kind = 'mamba';
@@ -44,6 +66,9 @@ export class Mamba implements BossAI {
   anim = 0;
   throwPose = 0;
   mirror: boolean;
+  /** 耐久战（第4.3次调整） */
+  final = false;
+  finalT = 0;
   private summoned = 0;
   private dashA = 0;
   private dashHit = new Set<number>();
@@ -58,6 +83,12 @@ export class Mamba implements BossAI {
   private mc: MirrorContact;
   private mBeamCd = 0;
   private mWave = false;
+  private mSlam = false;
+  // 跃起
+  private leapId = -1;
+  private leapFrom = { x: 0, y: 0 };
+  private leapTo = { x: 0, y: 0 };
+  private leapTele: Telegraph | null = null;
 
   constructor(private w: World, e: Enemy, mirror = false) {
     this.e = e;
@@ -86,6 +117,39 @@ export class Mamba implements BossAI {
     this.stateT = 0;
   }
 
+  /** 过场动画中与耐久战里免疫一切伤害 */
+  immune(): boolean {
+    return this.final || CINE_STATES.has(this.state);
+  }
+
+  airborne(): boolean {
+    return this.state === 'leap';
+  }
+
+  timer(): number {
+    if (!this.final) return -1;
+    if (!this.mirror && this.state !== 'roar') return Math.max(0, this.finalT);
+    return MAMBA_CINE.finalTime * Math.max(0, this.e.hp) / Math.max(1, this.e.maxHp);
+  }
+
+  /** 房主：第一次生命归零时倒地，开始过场动画 */
+  preventDeath(): boolean {
+    if (this.final) return true;
+    if (CINE_STATES.has(this.state)) { this.e.hp = 0; return true; }
+    const e = this.e;
+    e.hp = 0;
+    e.vx = e.vy = e.kx = e.ky = 0;
+    this.telegraphs = [];
+    this.chargesLeft = 0;
+    this.volley = 0;
+    this.leapTele = null;
+    this.throwPose = 0;
+    this.set('down');
+    // 所有玩家同时开始过场动画（world.startCine）
+    this.w.fxAll('cine');
+    return true;
+  }
+
   onDamaged(e: Enemy, amt: number): void {
     if (!this.enraged && e.hp < e.maxHp * 0.5) {
       this.enraged = true;
@@ -96,11 +160,12 @@ export class Mamba implements BossAI {
     void amt;
   }
 
-  applyState(state: number, anim: number, enraged: boolean, throwPose: number, tele: number[][]): void {
+  applyState(state: number, anim: number, enraged: boolean, throwPose: number, tele: number[][], fin = 0): void {
     this.state = MAMBA_STATES[state] ?? 'chase';
     this.anim = anim;
     this.enraged = enraged;
     this.throwPose = throwPose;
+    this.final = !!fin;
     this.telegraphs = tele.map(decodeTele);
     this.clipBeams();
   }
@@ -135,14 +200,26 @@ export class Mamba implements BossAI {
     return true;
   }
 
-  /** 镜像模式：本地判定冲撞、接触、激光与冲击波（第4.1次调整） */
+  /** 镜像模式：本地判定冲撞、接触、激光、冲击波与跃起落地（第4.1 / 4.3次调整） */
   mirrorHits(dt: number): void {
     const w = this.w, e = this.e, p = w.player;
-    this.mc.update(dt, this.state === 'charge', 16, 9);
+    const cine = CINE_STATES.has(this.state);
+    if (!cine && this.state !== 'leap') this.mc.update(dt, this.state === 'charge', 16, 9);
     if (this.mBeamCd > 0) this.mBeamCd -= dt;
     const ring = this.telegraphs.some((t) => t.kind === 'ring');
     if (!ring) this.mWave = false;
-    if (e.dead || !w.phaseActive() || !w.localTargetable()) return;
+    const slam = this.telegraphs.find((t) => t.kind === 'slam');
+    if (!slam) this.mSlam = false;
+    if (cine || e.dead || !w.phaseActive() || !w.localTargetable()) return;
+    if (slam && !this.mSlam) {
+      this.mSlam = true;
+      const ox = p.x - slam.x, oy = p.y - slam.y;
+      const dd = Math.hypot(ox, oy) || 0.01;
+      if (dd <= slam.r + p.r && w.damagePlayer(e.atk * SK.leapDmg, slam.x, slam.y, e.id)) {
+        p.kx += (ox / dd) * SK.leapKnock; p.ky += (oy / dd) * SK.leapKnock;
+        w.fx.shake(0.6);
+      }
+    }
     const ox = p.x - e.x, oy = p.y - e.y;
     if (ring && !this.mWave) {
       this.mWave = true;
@@ -168,6 +245,53 @@ export class Mamba implements BossAI {
     }
   }
 
+  /** 过场动画：倒地 → 爬起 → 怒吼（生命条重新填满）→ 耐久战 */
+  private updateCine(e: Enemy, dt: number): void {
+    const C = MAMBA_CINE;
+    e.vx = e.vy = 0;
+    e.kx = e.ky = 0;
+    e.phase += dt * 2;
+    switch (this.state) {
+      case 'down':
+        this.anim = 5;
+        this.throwPose = 0;
+        if (this.stateT >= C.down) this.set('rise');
+        break;
+      case 'rise':
+        this.anim = 6;
+        this.throwPose = clamp(this.stateT / C.rise, 0, 1);
+        if (this.stateT >= C.rise) {
+          this.set('roar');
+          this.final = true;
+          this.enraged = true;
+          this.finalT = C.finalTime;
+        }
+        break;
+      case 'roar':
+        this.anim = 1;
+        this.throwPose = 0;
+        // 生命条重新填满（之后变为计时条）
+        e.hp = e.maxHp * clamp(this.stateT / 1.0, 0, 1);
+        if (this.stateT >= C.roar) {
+          e.hp = e.maxHp;
+          this.finalT = C.finalTime;
+          this.set('chase');
+          this.attackCd = 1.2;
+          this.waveCd = 1.5;
+        }
+        break;
+    }
+  }
+
+  /** 耐久战结束：曼巴僵尸力竭倒下 */
+  private endure(e: Enemy): void {
+    const w = this.w;
+    this.telegraphs = [];
+    e.hp = 0;
+    w.fxAll('banner', '曼巴僵尸力竭倒下', '你们撑过了它最后的狂怒', '#ffd24a');
+    w.enemies.kill(e);
+  }
+
   updateAI(e: Enemy, dt: number): void {
     const w = this.w;
     this.stateT += dt;
@@ -175,6 +299,13 @@ export class Mamba implements BossAI {
     for (const [k, v] of this.contactCd) if (v > 0) this.contactCd.set(k, v - dt);
     for (const [k, v] of this.beamCd) if (v > 0) this.beamCd.set(k, v - dt);
     this.tickTelegraphs(dt);
+    if (CINE_STATES.has(this.state)) { this.updateCine(e, dt); return; }
+    // 耐久战：生命条是计时条
+    if (this.final) {
+      if (w.phaseActive()) this.finalT -= dt;
+      e.hp = e.maxHp * Math.max(0, this.finalT) / MAMBA_CINE.finalTime;
+      if (this.finalT <= 0) { this.endure(e); return; }
+    }
     const near = w.enemies.nearestTarget(e.x, e.y);
     if (this.state !== 'charge' || !this.focus) this.focus = near;
     const p = this.focus;
@@ -187,9 +318,12 @@ export class Mamba implements BossAI {
     const slow = e.slowT > 0 ? 0.85 : 1;
     const active = w.phaseActive();
 
-    // 召唤：每损失 1/5 生命召唤一批精英
+    // 跃起在空中：沿弧线飞向红圈，落地时造成范围伤害
+    if (this.state === 'leap') { this.updateLeap(e, dt); return; }
+
+    // 召唤：每损失 1/5 生命召唤一批精英（耐久战里不再召唤）
     const frac = e.hp / e.maxHp;
-    if ((this.state === 'chase' || this.state === 'recover') && this.summoned < SK.summonAt.length && frac < SK.summonAt[this.summoned]) {
+    if (!this.final && (this.state === 'chase' || this.state === 'recover') && this.summoned < SK.summonAt.length && frac < SK.summonAt[this.summoned]) {
       this.summoned++;
       this.set('summon');
       w.fxAll('banner', '尸群响应了曼巴的召唤', '大批精英丧尸正在靠近', '#ff8a1a');
@@ -219,12 +353,18 @@ export class Mamba implements BossAI {
         if (this.attackCd <= 0 && active) {
           const wCharge = d > 6 ? 0.32 : 0.18;
           const wLaser = this.enraged ? 0.42 : 0.34;
-          const pick = globalRng.weighted([['charge', wCharge], ['throw', 0.3], ['laser', wLaser]] as const);
+          // 耐久战：解锁跃起
+          const wLeap = this.final ? (d > 8 ? 0.55 : 0.4) : 0;
+          const pick = globalRng.weighted([['charge', wCharge], ['throw', 0.3], ['laser', wLaser], ['leap', wLeap]] as const);
           if (pick === 'charge') {
             this.chargesLeft = this.enraged ? 2 : 0;
             this.startCharge(e, toP, this.enraged ? 0.65 : 0.85);
           } else if (pick === 'throw') {
             this.set('windThrow');
+          } else if (pick === 'leap') {
+            this.leapId = p.id;
+            this.set('windLeap');
+            w.fxAll('sound', 'bossRoar', e.x, e.y, 0.7);
           } else {
             this.startLaser(e, toP);
           }
@@ -266,10 +406,22 @@ export class Mamba implements BossAI {
         this.anim = 4;
         if (this.stateT > (this.enraged ? 0.4 : 0.6)) this.set('chase');
         break;
+      case 'land':
+        // 落地后的硬直
+        this.anim = 4;
+        if (this.stateT > 0.7) { this.set('chase'); this.attackCd = this.cd(); }
+        break;
       case 'stunned':
         this.anim = 4;
         if (this.stateT > 1.3) { this.set('chase'); this.attackCd = this.cd() * 0.6; }
         break;
+      case 'windLeap': {
+        // 下蹲蓄力，然后起跳
+        this.anim = 1;
+        e.face += wrapAngle(toP - e.face) * damp(8, dt);
+        if (this.stateT >= SK.leapWind) this.startLeap(e, px, py);
+        break;
+      }
       case 'windThrow':
         this.anim = 3;
         this.throwPose = clamp(this.stateT / 0.45, 0, 1);
@@ -416,6 +568,71 @@ export class Mamba implements BossAI {
         this.hit(t, e.atk, ((t.x - e.x) / dd) * 9, ((t.y - e.y) / dd) * 9);
       }
     }
+  }
+
+  /** 起跳：在目标玩家脚下放出红圈（预警比投石更长、范围更大） */
+  private startLeap(e: Enemy, tx: number, ty: number): void {
+    const w = this.w;
+    this.leapFrom.x = e.x; this.leapFrom.y = e.y;
+    this.leapTo.x = tx; this.leapTo.y = ty;
+    this.leapTele = { kind: 'circle', x: tx, y: ty, a: 0, len: 0, r: SK.leapR, t: 0, dur: SK.leapAir, dead: false };
+    this.telegraphs.push(this.leapTele);
+    this.set('leap');
+    w.fxAll('sound', 'bossDash', e.x, e.y, 1);
+    w.fxAll('smoke', e.x, e.y, 14);
+    w.fxAll('shake', 0.5);
+  }
+
+  private updateLeap(e: Enemy, dt: number): void {
+    const w = this.w;
+    this.anim = 7;
+    const k = clamp(this.stateT / SK.leapAir, 0, 1);
+    // 瞄准：前一段时间红圈跟着目标玩家，之后锁定
+    if (this.stateT < SK.leapAim) {
+      const t = w.targets.find((x) => x.id === this.leapId);
+      if (t) {
+        this.leapTo.x = t.x; this.leapTo.y = t.y;
+        if (this.leapTele) { this.leapTele.x = t.x; this.leapTele.y = t.y; }
+      }
+    }
+    // 水平：先升空，再飞向红圈；高度：快速升起、悬停、急速落下
+    const hk = clamp((k - 0.15) / 0.7, 0, 1);
+    const s = hk * hk * (3 - 2 * hk);
+    const nx = this.leapFrom.x + (this.leapTo.x - this.leapFrom.x) * s;
+    const ny = this.leapFrom.y + (this.leapTo.y - this.leapFrom.y) * s;
+    e.vx = (nx - e.x) / Math.max(1e-3, dt);
+    e.vy = (ny - e.y) / Math.max(1e-3, dt);
+    e.x = nx; e.y = ny;
+    e.kx = e.ky = 0;
+    this.throwPose = k < 0.25 ? 1 - (1 - k / 0.25) ** 2 : k < 0.85 ? 1 : 1 - ((k - 0.85) / 0.15) ** 2;
+    if (k >= 1) this.land(e);
+  }
+
+  /** 落地：红圈范围内的玩家受到伤害并被震飞 */
+  private land(e: Enemy): void {
+    const w = this.w;
+    e.x = this.leapTo.x; e.y = this.leapTo.y;
+    e.vx = e.vy = 0;
+    if (w.col.resolveCircle(e.x, e.y, e.r, tmpP)) { e.x = tmpP.x; e.y = tmpP.y; }
+    this.throwPose = 0;
+    if (this.leapTele) this.leapTele.dead = true;
+    this.leapTele = null;
+    this.telegraphs = this.telegraphs.filter((t) => !t.dead);
+    this.telegraphs.push({ kind: 'slam', x: this.leapTo.x, y: this.leapTo.y, a: 0, len: 0, r: SK.leapR, t: 0, dur: 0.5, dead: false });
+    w.fxAll('sound', 'bossSlam', e.x, e.y, 1);
+    w.fxAll('sound', 'explosion', e.x, e.y, 1);
+    w.fxAll('shake', 1.3);
+    w.fxAll('smoke', e.x, e.y, 22);
+    if (w.phaseActive()) {
+      for (const t of w.targets) {
+        const ox = t.x - this.leapTo.x, oy = t.y - this.leapTo.y;
+        const dd = Math.hypot(ox, oy) || 0.01;
+        if (dd > SK.leapR + t.r) continue;
+        // 远程玩家在本地判定（见 mirrorHits）
+        this.hit(t, e.atk * SK.leapDmg, (ox / dd) * SK.leapKnock, (oy / dd) * SK.leapKnock);
+      }
+    }
+    this.set('land');
   }
 
   private startCharge(e: Enemy, toP: number, wind: number): void {
