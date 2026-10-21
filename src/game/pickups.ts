@@ -5,8 +5,10 @@
 //   （击杀者 100%，其他玩家 25%），因此不会出现重复吸取同一枚金币的问题。
 // - 联机时地面物品由房主裁决归属：非房主拾取前需要先向房主申请。
 // 第4.1次调整：奇物——任意玩家捡起后，所有玩家各自从三个增益中选择一个；1 秒内拾取的金币合并成一个跳字。
+// 第4.3次调整：联机且存活玩家不止一人时，地图道具剩下不足 6 个就在所有玩家的视野外补充，始终保持 6 个。
 
 import { PLAYER } from '../config';
+import { RELIC } from '../data/relics';
 import { randomBullet } from '../data/bullets';
 import { makeGun, rollRarity } from '../data/guns';
 import { BagItem, ITEMS, ItemId, ITEM_IDS, makeConsumable, WorldThing, itemSize, itemName, itemValue, rollGrade, consumableName } from '../data/items';
@@ -37,12 +39,20 @@ export interface WorldItem {
   auto: boolean; // 经过即可自动拾取（地图生成 / 丧尸掉落）
   pending: number; // 联机：正在向房主申请拾取
   failT: number; // 自动拾取失败（背包满）后的冷却
+  map?: boolean; // 地图生成的道具（区域开始时的 15 个，以及联机时补充的）
 }
+
+/**
+ * 联机补充地图道具（第4.3次调整）：存活玩家不止一人时，地图道具不足 6 个就补满 6 个。
+ * 补充的位置在所有玩家的视野外（镜头大约能看到左右 18 米、上下 14 米，这里留足余量；天生神力的视野更大）。
+ */
+export const ITEM_REFILL = { min: 6, viewX: 30, viewY: 24, every: 1 };
 
 export class Pickups {
   coins: Coin[] = [];
   items: WorldItem[] = [];
   private fullToastT = 0;
+  private refillT = 0;
 
   constructor(private w: World) {}
 
@@ -85,7 +95,47 @@ export class Pickups {
       const id = rng.weighted(ITEM_IDS.map((k) => [k, ITEMS[k].weight] as const));
       const s = spots[i];
       const thing = this.makeItem(id, rng, cfg.index, cfg.gunRarityW, cfg.purify);
-      this.items.push({ uid: cfg.index * 1000 + i, thing, x: s.x, y: s.y, dead: false, age: rng.range(0, 5), seen: false, auto: true, pending: 0, failT: 0 });
+      this.items.push({ uid: cfg.index * 1000 + i, thing, x: s.x, y: s.y, dead: false, age: rng.range(0, 5), seen: false, auto: true, pending: 0, failT: 0, map: true });
+    }
+  }
+
+  /** 房主：联机时把地图道具补满 6 个（第4.3次调整） */
+  private refill(dt: number): void {
+    const w = this.w;
+    const net = w.net;
+    if (!net || !net.isHost || w.layout.isBoss || !w.zoneStarted || w.phase !== 'explore') return;
+    this.refillT -= dt;
+    if (this.refillT > 0) return;
+    this.refillT = ITEM_REFILL.every;
+    if (net.aliveCount() < 2) return;
+    let n = 0;
+    for (const it of this.items) if (!it.dead && it.map) n++;
+    if (n >= ITEM_REFILL.min) return;
+    // 所有玩家（包括倒地、已进入安全屋的）的镜头位置
+    const views: { x: number; y: number; k: number }[] = [];
+    if (w.player.alive) views.push({ x: w.player.x, y: w.player.y, k: w.run.has('might') ? RELIC.mightScale : 1 });
+    for (const r of net.remotes()) if (!r.dead) views.push({ x: r.x, y: r.y, k: r.prof?.relics?.includes('might') ? RELIC.mightScale : 1 });
+    const hidden = (x: number, y: number) => views.every((v) => Math.abs(x - v.x) > ITEM_REFILL.viewX * v.k || Math.abs(y - v.y) > ITEM_REFILL.viewY * v.k);
+    const taken = (x: number, y: number) => this.items.some((it) => !it.dead && Math.hypot(it.x - x, it.y - y) < 4);
+    const L = w.layout;
+    const inRoom = (x: number, y: number) => [L.prevRoom, L.safeRoom].some((rm) => rm && x >= rm.rect.x0 - 1 && x <= rm.rect.x1 + 1 && y >= rm.rect.y0 - 1 && y <= rm.rect.y1 + 1);
+    // 优先使用地图的道具点，没有合适的再在区域里随机找一个能走到的位置
+    const spots = L.itemSpots.filter((s) => hidden(s.x, s.y) && !taken(s.x, s.y));
+    globalRng.shuffle(spots);
+    const cfg = L.cfg;
+    for (let k = n; k < ITEM_REFILL.min; k++) {
+      let s = spots.pop() ?? null;
+      for (let i = 0; i < 30 && !s; i++) {
+        const x = globalRng.range(L.rect.x0 + 2, L.rect.x1 - 2), y = globalRng.range(L.rect.y0 + 2, L.rect.y1 - 2);
+        if (!hidden(x, y) || taken(x, y) || inRoom(x, y) || !w.nav.reachable(x, y) || w.col.overlapsCircle(x, y, 0.9)) continue;
+        s = { x, y };
+      }
+      if (!s) break;
+      const id = globalRng.weighted(ITEM_IDS.map((key) => [key, ITEMS[key].weight] as const));
+      const thing = this.makeItem(id, globalRng, cfg.index, cfg.gunRarityW, cfg.purify);
+      const it: WorldItem = { uid: w.newItemUid(), thing, x: s.x, y: s.y, dead: false, age: globalRng.range(0, 5), seen: false, auto: true, pending: 0, failT: 0, map: true };
+      this.items.push(it);
+      net.itemDropped(it, thing);
     }
   }
 
@@ -164,6 +214,7 @@ export class Pickups {
       }
     }
     if (this.items.length > 80 && this.items.some((i) => i.dead)) this.items = this.items.filter((i) => !i.dead);
+    this.refill(dt);
   }
 
   nearestItem(x: number, y: number, r: number): WorldItem | null {

@@ -31,7 +31,8 @@ export class Overlay {
   }
 
   resize(w: number, h: number, dpr: number): void {
-    this.dpr = Math.min(2, dpr);
+    // 第4.3次调整（流畅性）：全屏的 2D 叠加层每帧都要清空重画，像素比最高 1.5 已经足够清晰
+    this.dpr = Math.min(1.5, dpr);
     this.w = w;
     this.h = h;
     this.canvas.width = Math.floor(w * this.dpr);

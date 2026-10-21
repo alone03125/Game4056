@@ -19,6 +19,7 @@ import { CHEST_HP, CREEPER, enhanceCoef, ZONES } from '../src/config';
 import { Mamba, MAMBA_CINE } from '../src/game/mamba';
 import { QTE, RELIC, RELIC_IDS } from '../src/data/relics';
 import { CORE_PURIFY } from '../src/game/world';
+import { ITEM_REFILL } from '../src/game/pickups';
 import { Rng } from '../src/util/rng';
 
 let fails = 0;
@@ -416,7 +417,7 @@ const tick = (w: World, sec: number, each?: () => void) => { for (let i = 0; i <
   check('发送信号：20 秒后完成', q.done);
   w.debugAdvance(); w.debugAdvance();
   const chest = w.quests.chest();
-  check('完成任务后下一区出现奇物宝箱（第二区 500 生命）', !!chest && chest.maxHp === 500 && w.layout.index === 2, chest ? String(chest.maxHp) : 'none');
+  check('完成任务后下一区出现奇物宝箱（第二区 2000 生命）', !!chest && chest.maxHp === CHEST_HP[2] && w.layout.index === 2, chest ? String(chest.maxHp) : 'none');
   if (chest) {
     w.enemies.damage(chest, 1e6, null);
     const relic = w.pickups.items.find((i) => !i.dead && i.thing.kind === 'relic');
@@ -653,5 +654,91 @@ const tick = (w: World, sec: number, each?: () => void) => { for (let i = 0; i <
   check('耐久战：辐射值照常上升，但不会扣血', w.run.hp === php && w.run.rad > 999, `${php} → ${w.run.hp}`);
   for (let i = 0; i < MAMBA_CINE.finalTime * 60 + 60 && w.phase !== 'victory'; i++) w.update(1 / 60, true);
   check('坚持到计时结束：胜利', w.phase === 'victory');
+}
+/** 两名玩家用内存中转联机（第4.3次调整的测试用） */
+function pair(n = 2) {
+  const hub = new MemHub();
+  const players = Array.from({ length: n }, (_, i) => ({ id: i, name: 'P' + i }));
+  const ws: World[] = [], coops: Coop[] = [];
+  for (const p of players) {
+    const end = hub.add(p.id);
+    const coop = new Coop(end, 0, players);
+    const w = new World(new RunState(77, 'normal', p.id), nullFx, { damageNumbers: false }, ev, coop);
+    coop.attach(w);
+    w.start(p.id);
+    (w as any).__god = true;
+    ws.push(w); coops.push(coop);
+  }
+  const step = (k: number) => { for (let i = 0; i < k; i++) { hub.update(1 / 60); for (let j = 0; j < ws.length; j++) { ws[j].run.invulnT = 99; ws[j].update(1 / 60, true); coops[j].tick(1 / 60); } } };
+  return { ws, coops, step };
+}
+
+// 24. 第4.3次调整：联机时把地图道具补满 6 个
+{
+  const { ws, step } = pair();
+  const [host, cli] = ws;
+  host.zoneStarted && host.enemies.clearAll();
+  step(30);
+  const mapItems = (w: World) => w.pickups.items.filter((it) => !it.dead && it.map);
+  check('区域开始时 15 个地图道具', mapItems(host).length === 15, String(mapItems(host).length));
+  // 拿走 12 个（只剩 3 个）
+  const list = mapItems(host);
+  for (let i = 0; i < 12; i++) list[i].dead = true;
+  step(90);
+  const after = mapItems(host);
+  check('不足 6 个时补到 6 个', after.length === ITEM_REFILL.min, String(after.length));
+  const views = [host.player, cli.player];
+  const fresh = after.filter((it) => !list.slice(0, 15).includes(it));
+  check('补充了 3 个新道具', fresh.length === 3, String(fresh.length));
+  check('补充的位置都在两名玩家的视野外', fresh.every((it) => views.every((v) => Math.abs(it.x - v.x) > ITEM_REFILL.viewX || Math.abs(it.y - v.y) > ITEM_REFILL.viewY)));
+  check('补充的位置都能走到', fresh.every((it) => host.nav.reachable(it.x, it.y)));
+  check('其他玩家也收到了补充的道具（小地图上暂不显示）', fresh.every((it) => { const c = cli.pickups.find(it.uid); return !!c && !!c.map && !c.seen; }));
+  // 只剩 1 名存活玩家时不再补充
+  cli.player.alive = false;
+  step(30);
+  check('房主收到队友阵亡', (host.net as Coop).remoteList()[0].dead);
+  for (const it of mapItems(host)) it.dead = true;
+  step(90);
+  check('只剩 1 名存活玩家时不补充', mapItems(host).length === 0, String(mapItems(host).length));
+}
+// 25. 单人模式不补充地图道具
+{
+  const run = new RunState(5, 'normal');
+  const w = new World(run, nullFx, { damageNumbers: false }, ev);
+  w.start();
+  w.enemies.clearAll();
+  for (const it of w.pickups.items) it.dead = true;
+  for (let i = 0; i < 120; i++) w.update(1 / 60, true);
+  check('单人模式不补充地图道具', w.pickups.items.filter((it) => !it.dead && it.map).length === 0);
+}
+// 26. 联机：曼巴僵尸的过场动画与耐久战同步
+{
+  const { ws, coops, step } = pair();
+  const [host, cli] = ws;
+  host.zoneStarted = false;
+  host.enemies.clearAll();
+  step(20);
+  const e = host.enemies.spawnBoss(host.player.x, host.player.y + 24, 'mamba');
+  // 镜像端按第六区的曼巴创建（测试里直接设置）
+  (host.layout as any).index = 6; (cli.layout as any).index = 6;
+  host.bossEnemy = e; host.boss = new Mamba(host, e);
+  step(30);
+  check('镜像端出现曼巴', !!cli.boss && cli.boss.kind === 'mamba');
+  host.enemies.damage(e, e.maxHp * 2, null);
+  step(10);
+  check('其他玩家也开始了过场动画', !!host.cine && !!cli.cine);
+  step(Math.ceil(6.6 * 60));
+  check('过场动画结束后双方都进入耐久战', !!host.boss?.final && !!cli.boss?.final && !host.cine && !cli.cine);
+  const ce = cli.bossEnemy!;
+  check('镜像端的计时条与房主一致', Math.abs(ce.hp / ce.maxHp - e.hp / e.maxHp) < 0.05, `${(ce.hp / ce.maxHp).toFixed(3)} / ${(e.hp / e.maxHp).toFixed(3)}`);
+  const hp0 = ce.hp;
+  cli.enemies.damage(ce, 1e6, null);
+  check('镜像端也免疫伤害', ce.hp === hp0 && !ce.dead);
+  cli.run.rad = 999; const h = cli.run.hp; cli.run.invulnT = 0;
+  for (let i = 0; i < 60; i++) { cli.update(1 / 60, true); }
+  check('镜像端辐射不扣血', cli.run.hp === h);
+  step(37 * 60);
+  check('计时结束：双方胜利', host.phase === 'victory' && cli.phase === 'victory', `${host.phase} ${cli.phase}`);
+  void coops;
 }
 console.log(fails ? `${fails} 项失败` : '全部通过');

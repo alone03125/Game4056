@@ -146,7 +146,7 @@ export class Coop implements NetHooks {
   }
 
   itemDropped(it: WorldItem, thing: WorldThing): void {
-    this.qAll.push({ k: 'drop', uid: it.uid, x: r2(it.x), y: r2(it.y), auto: it.auto ? 1 : 0, th: thing });
+    this.qAll.push({ k: 'drop', uid: it.uid, x: r2(it.x), y: r2(it.y), auto: it.auto ? 1 : 0, mp: it.map ? 1 : 0, th: thing });
   }
 
   revive(id: number): void {
@@ -442,10 +442,13 @@ export class Coop implements NetHooks {
         break;
       case 'take': w.pickups.onTaken(ev.uid, ev.by); break;
       case 'deny': w.pickups.onDenied(ev.uid); break;
-      case 'drop':
+      case 'drop': {
         if (!this.inBounds(ev.x, ev.y) || w.pickups.find(ev.uid)) break;
-        w.pickups.dropThing(reuid(ev.th as WorldThing), ev.x, ev.y, !!ev.auto, ev.uid, false);
+        const it = w.pickups.dropThing(reuid(ev.th as WorldThing), ev.x, ev.y, !!ev.auto, ev.uid, false);
+        // 房主补充的地图道具：和区域开始时的一样，走近之后才显示在小地图上
+        if (ev.mp) { it.map = true; it.seen = false; }
         break;
+      }
       case 'rev': w.revived(this.name(from)); break;
     }
   }

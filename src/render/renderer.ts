@@ -1,4 +1,6 @@
 // 渲染器：three.js 场景、俯视相机、灯光（阴影/手电/枪口火光/爆炸光/环境光源）、后期泛光。
+// 第4.3次调整（流畅性）：用 GPU 计时查询测量每帧的实际 GPU 耗时，超出预算时自动降低 3D 画面的渲染分辨率，
+// 有余量时再升回去（UI 与文字不受影响）。GPU 跟不上时浏览器会阻塞主线程，连带让按钮的音效与特效延迟。
 
 import * as THREE from 'three';
 import { SUIT_MAX } from '../config';
@@ -19,6 +21,12 @@ import { damp } from '../util/math';
 export type Quality = 0 | 1 | 2; // 低 / 中 / 高
 
 interface PooledLight { light: THREE.PointLight; t: number; dur: number; peak: number }
+
+/**
+ * 自动渲染分辨率（自定）：GPU 每帧耗时的平滑值超过 13ms 时降低 15%，低于 7ms 时（至少 4 秒后）升高 12%；
+ * 渲染倍率最低为原来的 0.55 倍、像素比不低于 0.7。不支持 GPU 计时的浏览器改用帧间隔判断（> 22ms 降低，< 13ms 升高）。
+ */
+export const AUTO_RES = { high: 13, low: 7, frameHigh: 22, frameLow: 13, down: 0.85, up: 1.12, minScale: 0.55, minPr: 0.7, settle: 1.5, upWait: 4 };
 
 export class Renderer {
   renderer: THREE.WebGLRenderer;
@@ -56,10 +64,24 @@ export class Renderer {
   private ndc = new THREE.Vector2();
   width = 1;
   height = 1;
+  /** 自动渲染分辨率：相对设备像素比的倍率（1 = 不降低） */
+  renderScale = 1;
+  /** 平滑后的 GPU 每帧耗时（毫秒；不支持计时查询时为帧间隔） */
+  gpuMs = 0;
+  private basePr = 1;
+  private gl: WebGL2RenderingContext;
+  private gpuExt: { TIME_ELAPSED_EXT: number; GPU_DISJOINT_EXT: number } | null = null;
+  private gpuQ: WebGLQuery | null = null;
+  private gpuN = 0;
+  private scaleT = 0;
+  private lastFrameAt = 0;
 
   constructor(container: HTMLElement, quality: Quality) {
     this.quality = quality;
-    this.renderer = new THREE.WebGLRenderer({ antialias: quality >= 1, powerPreference: 'high-performance' });
+    // 高画质经过后期合成（泛光）绘制，默认帧缓冲的多重采样用不上，只会白白增加显存带宽
+    this.renderer = new THREE.WebGLRenderer({ antialias: quality === 1, powerPreference: 'high-performance' });
+    this.gl = this.renderer.getContext() as WebGL2RenderingContext;
+    try { this.gpuExt = this.gl.getExtension('EXT_disjoint_timer_query_webgl2'); } catch { this.gpuExt = null; }
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.25;
@@ -116,7 +138,18 @@ export class Renderer {
   resize(w: number, h: number): void {
     this.width = w;
     this.height = h;
-    const pr = Math.min(window.devicePixelRatio || 1, this.quality >= 2 ? 2 : this.quality === 1 ? 1.5 : 1);
+    this.basePr = Math.min(window.devicePixelRatio || 1, this.quality >= 2 ? 2 : this.quality === 1 ? 1.5 : 1);
+    this.applyPixelRatio();
+  }
+
+  /** 当前实际使用的像素比 */
+  get pixelRatio(): number {
+    return Math.max(Math.min(AUTO_RES.minPr, this.basePr), this.basePr * this.renderScale);
+  }
+
+  private applyPixelRatio(): void {
+    const w = this.width, h = this.height;
+    const pr = this.pixelRatio;
     this.renderer.setPixelRatio(pr);
     this.renderer.setSize(w, h, false);
     this.renderer.domElement.style.width = w + 'px';
@@ -144,6 +177,9 @@ export class Renderer {
     this.hemi.intensity = pal.hemiIntensity * 2.5;
     this.sun.color.setHex(pal.sun);
     this.sun.intensity = pal.sunIntensity * 1.6;
+    // 第4.3次调整（流畅性）：新区域生成时就开始编译着色器（显卡驱动支持并行编译时不会阻塞），减少第一次画出来时的卡顿。
+    // 不用 compileAsync：它的轮询在区域连续重建时会报错
+    try { this.renderer.compile(this.scene, this.camera); } catch { /* 跳过 */ }
   }
 
   shake(a: number): void {
@@ -261,8 +297,57 @@ export class Renderer {
     this.entities.update(w, dt, time, this.camera);
     this.quests.update(w, dt, time, this.camera, this.zone);
     this.particles.update(dt);
+    const timing = this.gpuBegin();
     if (this.composer) this.composer.render(dt);
     else this.renderer.render(this.scene, this.camera);
+    if (timing) this.gl.endQuery(this.gpuExt!.TIME_ELAPSED_EXT);
+    this.autoRes();
+  }
+
+  /** 开始本帧的 GPU 计时（同一时间只有一个查询；上一个的结果出来后才开始下一个） */
+  private gpuBegin(): boolean {
+    const ext = this.gpuExt, gl = this.gl;
+    if (!ext) return false;
+    if (this.gpuQ) {
+      if (!gl.getQueryParameter(this.gpuQ, gl.QUERY_RESULT_AVAILABLE)) return false;
+      if (!gl.getParameter(ext.GPU_DISJOINT_EXT)) this.sampleGpu(gl.getQueryParameter(this.gpuQ, gl.QUERY_RESULT) / 1e6);
+      gl.deleteQuery(this.gpuQ);
+      this.gpuQ = null;
+    }
+    const q = gl.createQuery();
+    if (!q) return false;
+    this.gpuQ = q;
+    gl.beginQuery(ext.TIME_ELAPSED_EXT, q);
+    return true;
+  }
+
+  private sampleGpu(ms: number): void {
+    if (!(ms > 0 && ms < 500)) return;
+    this.gpuMs = this.gpuN === 0 ? ms : this.gpuMs + (ms - this.gpuMs) * 0.12;
+    this.gpuN++;
+  }
+
+  /** 根据 GPU 耗时（或帧间隔）调整渲染分辨率 */
+  private autoRes(): void {
+    const now = performance.now();
+    const gap = this.lastFrameAt ? (now - this.lastFrameAt) / 1000 : 0;
+    this.lastFrameAt = now;
+    // 切到后台、暂停后恢复等长间隔不计入
+    if (gap <= 0 || gap > 0.25) return;
+    this.scaleT += gap;
+    if (!this.gpuExt) this.sampleGpu(gap * 1000);
+    if (this.gpuN < 20 || this.scaleT < AUTO_RES.settle) return;
+    const high = this.gpuExt ? AUTO_RES.high : AUTO_RES.frameHigh;
+    const low = this.gpuExt ? AUTO_RES.low : AUTO_RES.frameLow;
+    let s = this.renderScale;
+    if (this.gpuMs > high && s > AUTO_RES.minScale && this.basePr * s > AUTO_RES.minPr) s = Math.max(AUTO_RES.minScale, s * AUTO_RES.down);
+    else if (this.gpuMs < low && s < 1 && this.scaleT > AUTO_RES.upWait) s = Math.min(1, s * AUTO_RES.up);
+    else return;
+    this.renderScale = s;
+    this.applyPixelRatio();
+    // 重新测量
+    this.scaleT = 0;
+    this.gpuN = 0;
   }
 
   dispose(): void {

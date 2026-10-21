@@ -56,6 +56,17 @@ function fmtDmg(v: number): string {
   return String(Math.round(v));
 }
 
+/** 只在内容变化时写入 DOM（第4.3次调整：避免每秒 30 次无谓的重排与重绘） */
+const lastHtml = new WeakMap<HTMLElement, string>();
+function setHtml(el: HTMLElement, html: string): void {
+  if (lastHtml.get(el) === html) return;
+  lastHtml.set(el, html);
+  el.innerHTML = html;
+}
+function setText(el: HTMLElement, text: string): void {
+  if (el.textContent !== text) el.textContent = text;
+}
+
 function escHtml(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] ?? c));
 }
@@ -118,10 +129,13 @@ export class Hud {
   private lbT = 0;
   private fadeEls: HTMLElement[] = [];
   private mouse = { x: -1, y: -1, on: false };
+  private comboPos = { x: 24, y: 300 };
+  private comboT = 0;
   private cineBars!: HTMLDivElement;
   private cineRed!: HTMLDivElement;
   private cineFlash!: HTMLDivElement;
   private cineSub!: HTMLDivElement;
+  private vigSig = '';
   onBagClick: () => void = () => {};
   onQuickUse: (i: number) => void = () => {};
 
@@ -211,10 +225,14 @@ export class Hud {
 
   /** 连杀播报的位置：左侧，生命面板与枪械面板之间（第4.3次调整） */
   comboAnchor(): { x: number; y: number } {
+    const now = performance.now();
+    if (now - this.comboT < 500) return this.comboPos;
+    this.comboT = now;
     const tl = this.root.querySelector('.hud-tl')!.getBoundingClientRect();
     const bl = this.root.querySelector('.hud-bl')!.getBoundingClientRect();
     const top = tl.bottom + 36, bottom = bl.top - 36;
-    return { x: 24, y: bottom > top ? Math.min(bottom, Math.max(top, window.innerHeight * 0.48)) : top };
+    this.comboPos = { x: 24, y: bottom > top ? Math.min(bottom, Math.max(top, window.innerHeight * 0.48)) : top };
+    return this.comboPos;
   }
 
   private updateFade(cine: boolean): void {
@@ -280,9 +298,11 @@ export class Hud {
     this.tick += dt;
     this.exploreT -= dt;
     if (this.exploreT <= 0) { this.exploreT = 0.2; this.reveal(w); }
-    this.drawMinimap(w);
     if (this.tick < 1 / 30) return;
     this.tick = 0;
+    // 第4.3次调整：先读取面板位置（此时布局是干净的），再写入本轮的变化；小地图也改为每秒 30 次
+    this.updateFade(!!w.cine);
+    this.drawMinimap(w);
     const src = this.source(w);
     // 生命
     const hpf = Math.max(0, src.hp / Math.max(1, src.maxHp));
@@ -291,15 +311,15 @@ export class Hud {
     // 精研百草：超过上限的生命以金色显示
     this.hpOver.style.width = Math.min(1, Math.max(0, hpf - 1)) * 100 + '%';
     const hpNum = `${Math.ceil(Math.max(0, src.hp))} / ${Math.round(src.maxHp)}`;
-    this.hpText.textContent = src.watching !== null
+    const hpStr = src.watching !== null
       ? (src.watching ? `观战 ${src.watching}　${src.downed ? '倒地' : hpNum}` : '阵亡（观战中）')
       : src.downed ? '倒地，等待队友拉起' : hpNum;
-    this.statRow.innerHTML = `<span>防护服 <b>${SUIT_NAMES[Math.min(5, src.suit)]}</b></span><span>移速 <b>${src.speed.toFixed(1)}</b> m/s</span><span>后坐减免 <b>${Math.round(src.recoilResist * 100)}%</b></span>`;
+    setText(this.hpText, hpStr);
+    setHtml(this.statRow, `<span>防护服 <b>${SUIT_NAMES[Math.min(5, src.suit)]}</b></span><span>移速 <b>${src.speed.toFixed(1)}</b> m/s</span><span>后坐减免 <b>${Math.round(src.recoilResist * 100)}%</b></span>`);
     this.updateTeam(w);
     this.lbT -= 1 / 30;
     if (this.lbT <= 0) { this.lbT = 0.5; this.updateBoard(w); }
     this.updateCine(w);
-    this.updateFade(!!w.cine);
     const bf: string[] = [];
     const [iv, oh, ee] = src.buffs;
     if (iv > 0) bf.push(`<span class="buff" style="color:#fff6d8">无敌 ${iv.toFixed(1)}s</span>`);
@@ -308,16 +328,16 @@ export class Hud {
     if (src.watching === null && w.combo.count >= 5) bf.push(`<span class="buff" style="color:#ffd24a">连杀 ×${w.combo.count}</span>`);
     if (src.watching === null && w.relicFx.shieldCd > 0) bf.push(`<span class="buff" style="color:#fff2a0">圣盾冷却 ${w.relicFx.shieldCd.toFixed(1)}s</span>`);
     if (src.watching === null && w.relicFx.weakT > 0) bf.push(`<span class="buff" style="color:#ff9a6a">造成伤害 -30% ${w.relicFx.weakT.toFixed(1)}s</span>`);
-    this.buffs.innerHTML = bf.join('');
+    setHtml(this.buffs, bf.join(''));
     this.updateRelics(src.relics, src.watching === null ? (id) => w.run.relicBadge(id) : () => null);
     // 区域
     const cfg = w.layout.cfg;
     if (w.phase === 'safehouse') {
-      this.zoneName.textContent = `安全屋　${ZONES[w.safehouseZone - 1].name}`;
-      this.zoneSub.textContent = `整备中，下一站：${cfg.name} ${cfg.subtitle}`;
+      setText(this.zoneName, `安全屋　${ZONES[w.safehouseZone - 1].name}`);
+      setHtml(this.zoneSub, escHtml(`整备中，下一站：${cfg.name} ${cfg.subtitle}`));
     } else {
-      this.zoneName.textContent = `${cfg.name}　${cfg.subtitle}`;
-      this.zoneSub.innerHTML = `<div>探索计时 <b class="num">${fmtTime(w.zoneTime)}</b>　难度 ${w.diffName()}</div><div>丧尸强化 <b class="num">×${enhanceCoef(src.rad).toFixed(2)}</b></div>`;
+      setText(this.zoneName, `${cfg.name}　${cfg.subtitle}`);
+      setHtml(this.zoneSub, `<div>探索计时 <b class="num">${fmtTime(w.zoneTime)}</b>　难度 ${w.diffName()}</div><div>丧尸强化 <b class="num">×${enhanceCoef(src.rad).toFixed(2)}</b></div>`);
     }
     this.updateQuest(w);
     const th = src.thresh;
@@ -338,10 +358,10 @@ export class Hud {
       });
     }
     const rate = w.phaseActive() ? `+${cfg.radRate.toFixed(1)}K/s` : '已暂停';
-    this.radHead.innerHTML = `<span>☢ 辐射 <b class="num">${src.rad.toFixed(1)}K</b> <span style="color:#888">${rate}</span></span>`;
+    setHtml(this.radHead, `<span>☢ 辐射 <b class="num">${src.rad.toFixed(1)}K</b> <span style="color:#888">${rate}</span></span>`);
     this.rad.className = 'rad' + (src.radLevel ? ' warn' + src.radLevel : '');
     // 右上
-    this.trStats.innerHTML = `<span>携带 <b style="color:#ffd24a">${fmtNum(src.gold)}</b></span><span>已存 <b style="color:#ffd24a">${fmtNum(src.bank)}</b></span><span>在场 <b>${w.enemies.list.length}</b></span>`;
+    setHtml(this.trStats, `<span>携带 <b style="color:#ffd24a">${fmtNum(src.gold)}</b></span><span>已存 <b style="color:#ffd24a">${fmtNum(src.bank)}</b></span><span>在场 <b>${w.enemies.list.length}</b></span>`);
     // 枪
     for (let i = 0; i < 2; i++) this.updateGunCard(src, i);
     // 背包
@@ -388,7 +408,9 @@ export class Hud {
     const lowHp = hpf < 0.3 && src.alive ? (0.3 - hpf) / 0.3 : 0;
     const radC = ['0,0,0', '255,225,74', '255,138,26', '255,40,40'][src.radLevel];
     const radA = [0.55, 0.25, 0.32, 0.45][src.radLevel];
-    this.vignette.style.boxShadow = `inset 0 0 ${160 + lowHp * 80}px ${lowHp > 0 ? `rgba(200,0,0,${0.35 + lowHp * 0.4})` : `rgba(${radC},${radA})`}`;
+    const lq = Math.round(lowHp * 20) / 20;
+    const vig = `inset 0 0 ${Math.round(160 + lq * 80)}px ${lq > 0 ? `rgba(200,0,0,${(0.35 + lq * 0.4).toFixed(2)})` : `rgba(${radC},${radA})`}`;
+    if (vig !== this.vigSig) { this.vigSig = vig; this.vignette.style.boxShadow = vig; }
   }
 
   /** 奇物增益：小图标（悬停显示说明）；友谊地久天长的层数与聚精会神的代币显示在角落 */
@@ -436,12 +458,7 @@ export class Hud {
   private updateCine(w: World): void {
     const c = w.cine;
     this.root.classList.toggle('cine', !!c);
-    if (!c) {
-      this.cineRed.style.opacity = '0';
-      this.cineFlash.style.opacity = '0';
-      this.cineSub.textContent = '';
-      return;
-    }
+    if (!c) return;
     const roarAt = MAMBA_CINE.down + MAMBA_CINE.rise;
     // 心跳：每一下都让屏幕边缘泛起红光，越来越强
     let red = 0;

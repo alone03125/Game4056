@@ -68,6 +68,9 @@ export class App {
   private menuCam = { x: 0, y: 0, t: 0 };
   private ambientT = 0;
   private lastHints = '';
+  /** 第4.3次调整（流畅性）：暂停时画面不变，只重绘最开始的几帧；主菜单背景隔一帧渲染一次 */
+  private stillFrames = 0;
+  private menuSkip = false;
 
   constructor(root: HTMLElement) {
     this.root = root;
@@ -143,6 +146,7 @@ export class App {
 
   private resize(): void {
     const w = window.innerWidth, h2 = window.innerHeight;
+    this.stillFrames = 0;
     this.renderer.resize(w, h2);
     this.overlay.resize(w, h2, window.devicePixelRatio || 1);
     // 小窗口时整体缩放界面（以 1280×760 为参考分辨率）
@@ -506,7 +510,9 @@ export class App {
     if (this.fpsT >= 0.5) {
       if (this.settings.showFps) {
         const ping = this.net && this.coop && !this.coop.isHost ? `　延迟 ${Math.round(this.net.rtt)}ms` : '';
-        this.hud.fps.textContent = `${Math.round(this.fpsN / this.fpsT)} FPS　${this.world ? this.world.enemies.list.length : 0} 敌人　${this.world ? this.world.projs.list.length : 0} 弹${ping}`;
+        const R = this.renderer;
+        const res = `　渲染 ${Math.round(R.renderScale * 100)}%（GPU ${R.gpuMs.toFixed(1)}ms）`;
+        this.hud.fps.textContent = `${Math.round(this.fpsN / this.fpsT)} FPS　${this.world ? this.world.enemies.list.length : 0} 敌人　${this.world ? this.world.projs.list.length : 0} 弹${ping}${res}`;
       }
       this.fpsT = 0; this.fpsN = 0;
     }
@@ -567,9 +573,12 @@ export class App {
     w.player.x = c.x; w.player.y = c.y;
     w.view.x = c.x; w.view.y = c.y;
     this.renderer.flash.intensity = 0;
-    this.renderer.frame(w, dt, this.time, c.x, c.y + 6);
+    // 主菜单的背景只是缓慢移动的镜头：30 帧足够，省下的 GPU 让菜单按钮的响应更及时
+    this.menuSkip = !this.menuSkip;
+    if (this.menuSkip) return;
+    this.renderer.frame(w, dt * 2, this.time, c.x, c.y + 6);
     this.overlay.begin();
-    this.ambient(dt, c.x, c.y, L.cfg.palette.accent);
+    this.ambient(dt * 2, c.x, c.y, L.cfg.palette.accent);
   }
 
   private frameGame(dt: number, render: boolean): void {
@@ -619,7 +628,9 @@ export class App {
     const th = w.radThresh();
     this.audio.ambience(dt, w.radLevel, Math.min(1, w.run.rad / th[0]), w.run.hp / w.run.maxHp, running && p.standing && w.phaseActive());
     const aimX = this.bot ? w.input.aimX : this.aim.x, aimY = this.bot ? w.input.aimY : this.aim.y;
-    this.renderer.frame(w, running ? dt : 0, this.time, aimX, aimY);
+    // 暂停时（暂停菜单、背包、奇物三选一）场景是静止的：画好几帧之后就不再重复渲染 3D 画面，画布会保留最后一帧
+    this.stillFrames = running ? 0 : this.stillFrames + 1;
+    if (this.stillFrames < 4) this.renderer.frame(w, running ? dt : 0, this.time, aimX, aimY);
     // 特效：区域效果粒子
     if (running) {
       for (const hz of w.projs.hazards) {
