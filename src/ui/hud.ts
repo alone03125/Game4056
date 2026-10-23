@@ -67,6 +67,9 @@ function setText(el: HTMLElement, text: string): void {
   if (el.textContent !== text) el.textContent = text;
 }
 
+/** Boss 伤害减免的小盾图标 */
+const SHIELD_SVG = '<svg viewBox="0 0 12 14" width="12" height="14"><path d="M6 .8 11.2 2.7V7c0 3-2.2 5.1-5.2 6.2C3 12.1.8 10 .8 7V2.7Z" fill="#6ab8ff" stroke="#e8f6ff" stroke-width="1"/><path d="M6 3v8" stroke="#e8f6ff" stroke-width="1" opacity=".6"/></svg>';
+
 function escHtml(s: string): string {
   return s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c] ?? c));
 }
@@ -101,6 +104,7 @@ export class Hud {
   private bossBar!: HTMLDivElement;
   private bossFill!: HTMLDivElement;
   private bossName!: HTMLDivElement;
+  private bossShield!: HTMLDivElement;
   private hints!: HTMLDivElement;
   private relicRow!: HTMLDivElement;
   private relicSig = '';
@@ -209,7 +213,8 @@ export class Hud {
     this.bossName = h('div', { class: 'bn' });
     this.bossFill = h('div', { class: 'bf' });
     this.bossPips = h('div', { class: 'boss-pips' });
-    this.bossBar = h('div', { class: 'boss-bar hidden' }, this.bossName, h('div', { class: 'bb' }, this.bossFill), this.bossPips);
+    this.bossShield = h('div', { class: 'boss-shield hidden' });
+    this.bossBar = h('div', { class: 'boss-bar hidden' }, this.bossName, h('div', { class: 'bb' }, this.bossFill), this.bossPips, h('div', null, this.bossShield));
     this.hints = h('div', { class: 'hints panel' });
     this.fps = h('div', { class: 'fps hidden' });
     this.root.append(this.banner, this.bossBar, this.hints, this.fps);
@@ -403,6 +408,10 @@ export class Hud {
         clear(this.bossPips);
         if (total > 1) for (let i = 0; i < total; i++) this.bossPips.appendChild(h('i', { class: i < total - phase + 1 ? 'on' : '' }));
       }
+      // v4.3.7：转阶段的伤害减免——生命条下方的小盾与百分比
+      const pct = B.final || B.immune() ? 0 : Math.ceil(B.shield.dr * 100 - 1e-6);
+      this.bossShield.classList.toggle('hidden', pct <= 0);
+      if (pct > 0) setHtml(this.bossShield, `${SHIELD_SVG}<span>${pct}%</span>`);
     } else this.bossBar.classList.add('hidden');
     // 暗角：辐射 + 低血量
     const lowHp = hpf < 0.3 && src.alive ? (0.3 - hpf) / 0.3 : 0;

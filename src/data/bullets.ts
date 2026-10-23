@@ -3,6 +3,8 @@
 // 第4.1次调整：子弹与模块共用一个随机池，按权重抽取（未特别说明的权重都是 10）。
 // 第4.2次调整：普通子弹的权重提高到 25，稀有子弹仍为 10，让子弹比模块更容易出现；删除熔炼模块。
 // 第4.3次调整：环形弹幕、感应地雷、炸弹的攻击力降低；追踪模块对环形弹幕无效；增幅模块附带 +30° 散射。
+// 第4.3次调整（续）：没有范围伤害的子弹攻击力约 +40%（取整）；有范围伤害的子弹（炸弹、三级火箭、感应地雷、毒雾弹、奇点弹）
+// 攻击力不变，基础大小（决定爆炸 / 毒雾 / 奇点的范围）-40%。v4.3.7：奇点弹的大小改回 7。
 
 import { Rng } from '../util/rng';
 
@@ -106,105 +108,105 @@ export const RARE_BULLETS: BulletId[] = ['rocket', 'singular', 'mystery', 'snipe
 
 export const BULLETS: Record<BulletId, BulletDef> = {
   std: {
-    id: 'std', name: '标准弹', atk: 60, spd: 70, rng: 3, deg: 0, rc: 1.0, mods: {},
+    id: 'std', name: '标准弹', atk: 84, spd: 70, rng: 3, deg: 0, rc: 1.0, mods: {},
     effect: '最基础的金属弹头，稳定可靠。', weight: 25, color: 0xffd27a, kind: 'bullet', sfx: 'pistol',
   },
   // 第4.1次调整：黄铜子弹、重型铅弹、追踪飞镖、喷射推进弹对枪械的负面影响减小
   brass: {
-    id: 'brass', name: '穿透型黄铜子弹', atk: 45, spd: 85, rng: 2.5, deg: -2, rc: 0.8, mods: { delay: -0.01, spread: -3 },
+    id: 'brass', name: '穿透型黄铜子弹', atk: 63, spd: 85, rng: 2.5, deg: -2, rc: 0.8, mods: { delay: -0.01, spread: -3 },
     effect: '本子弹可以穿透 3 个单位。', weight: 25, color: 0xffb84a, kind: 'bullet', sfx: 'pistol', pierce: 3,
   },
   lead: {
-    id: 'lead', name: '重型铅弹', atk: 120, spd: 55, rng: 5, deg: 3, rc: 4.5, mods: { delay: 0.04, reload: 0.04 },
+    id: 'lead', name: '重型铅弹', atk: 168, spd: 55, rng: 5, deg: 3, rc: 4.5, mods: { delay: 0.04, reload: 0.04 },
     effect: '沉重的铅弹，击退命中的敌人，可以穿透 1 个单位。', weight: 25, color: 0xb0b8c8, kind: 'bullet', sfx: 'heavy',
     pierce: 1, flags: { knock: 4 },
   },
   tri: {
-    id: 'tri', name: '三发弹丸', atk: 24, spd: 90, rng: 4.5, deg: 75, rc: 3.3, mods: { delay: 0.03, reload: 0.07 },
+    id: 'tri', name: '三发弹丸', atk: 34, spd: 90, rng: 4.5, deg: 75, rc: 3.3, mods: { delay: 0.03, reload: 0.07 },
     effect: '一次可以射出 3 发子弹，子弹会射向不同的方向。本子弹可以穿透 1 个单位。', weight: 25, color: 0xffe08a,
     kind: 'bullet', sfx: 'shotgun', count: 3, pierce: 1,
   },
   buck: {
-    id: 'buck', name: '鹿弹', atk: 20, spd: 75, rng: 3, deg: 40, rc: 2.5, mods: { delay: 0.06, reload: 0.12 },
+    id: 'buck', name: '鹿弹', atk: 28, spd: 75, rng: 3, deg: 40, rc: 2.5, mods: { delay: 0.06, reload: 0.12 },
     effect: '一次射出 7 发弹丸，射程较短（13 米）。', weight: 25, color: 0xffc66a, kind: 'bullet', sfx: 'shotgun',
     count: 7, range: 13,
   },
   bomb: {
-    id: 'bomb', name: '炸弹', atk: 160, spd: 22, rng: 9, deg: -10, rc: 5, mods: { delay: 0.05, spread: -5 },
+    id: 'bomb', name: '炸弹', atk: 160, spd: 22, rng: 5.4, deg: -10, rc: 5, mods: { delay: 0.05, spread: -5 },
     effect: '向前方抛出一枚炸弹，2.5 秒后爆炸，伤害范围内的所有单位。', weight: 25,
     color: 0xff6a3a, kind: 'bomb', sfx: 'thump',
   },
   rocket: {
-    id: 'rocket', name: '三级火箭', atk: 240, spd: 30, rng: 7, deg: 0, rc: 30, mods: { delay: 0.3, reload: 0.3 },
+    id: 'rocket', name: '三级火箭', atk: 240, spd: 30, rng: 4.2, deg: 0, rc: 30, mods: { delay: 0.3, reload: 0.3 },
     effect: '发射后逐级加速，命中敌人或墙壁时爆炸。后坐力极大，可以把你推飞。', weight: 10, color: 0xff8a2a,
     kind: 'rocket', sfx: 'launcher',
   },
   ricochet: {
-    id: 'ricochet', name: '弹跳弹', atk: 48, spd: 65, rng: 3, deg: 0, rc: 1.0, mods: { delay: 0.01 },
+    id: 'ricochet', name: '弹跳弹', atk: 67, spd: 65, rng: 3, deg: 0, rc: 1.0, mods: { delay: 0.01 },
     effect: '遇到墙壁会反弹（最多 4 次），命中敌人后会弹向附近的另一个敌人（最多 2 次）。', weight: 25,
     color: 0x8affc8, kind: 'bullet', sfx: 'pistol', flags: { wallBounce: 4, enemyBounce: 2 },
   },
   homing: {
-    id: 'homing', name: '追踪飞镖', atk: 42, spd: 38, rng: 2.5, deg: 20, rc: 0.6, mods: { delay: -0.01, reload: -0.04 },
+    id: 'homing', name: '追踪飞镖', atk: 59, spd: 38, rng: 2.5, deg: 20, rc: 0.6, mods: { delay: -0.01, reload: -0.04 },
     effect: '飞镖会自动追踪附近的敌人。', weight: 25, color: 0xff6ad8, kind: 'bullet', sfx: 'zap',
     range: 60, flags: { homing: true },
   },
   fire: {
-    id: 'fire', name: '燃烧弹', atk: 33, spd: 60, rng: 3.5, deg: 5, rc: 1.2, mods: { reload: 0.04 },
+    id: 'fire', name: '燃烧弹', atk: 46, spd: 60, rng: 3.5, deg: 5, rc: 1.2, mods: { reload: 0.04 },
     effect: '点燃敌人：3 秒内每秒额外造成 40% 攻击力的伤害。燃烧中的敌人死亡时会引燃身边的同伴。', weight: 25,
     color: 0xff5a1a, kind: 'bullet', sfx: 'pistol', flags: { burn: true },
   },
   cryo: {
-    id: 'cryo', name: '液氮弹', atk: 33, spd: 60, rng: 3.5, deg: 0, rc: 1.0, mods: { delay: 0.02 },
+    id: 'cryo', name: '液氮弹', atk: 46, spd: 60, rng: 3.5, deg: 0, rc: 1.0, mods: { delay: 0.02 },
     effect: '冻结敌人，使其移动速度降低 50%，持续 2.5 秒。可以穿透 1 个单位。', weight: 25, color: 0x7ad8ff,
     kind: 'bullet', sfx: 'zap', pierce: 1, flags: { slow: true },
   },
   chain: {
-    id: 'chain', name: '电弧弹', atk: 54, spd: 100, rng: 2, deg: 0, rc: 0.5, mods: { delay: 0.05 },
+    id: 'chain', name: '电弧弹', atk: 76, spd: 100, rng: 2, deg: 0, rc: 0.5, mods: { delay: 0.05 },
     effect: '命中后释放电弧，在 7 米内跳跃 4 次，每次跳跃伤害为上一次的 80%。', weight: 25, color: 0x9ab8ff,
     kind: 'bullet', sfx: 'zap', flags: { chain: 4 },
   },
   split: {
-    id: 'split', name: '分裂弹', atk: 62, spd: 60, rng: 4, deg: 0, rc: 1.5, mods: { delay: 0.05 },
+    id: 'split', name: '分裂弹', atk: 87, spd: 60, rng: 4, deg: 0, rc: 1.5, mods: { delay: 0.05 },
     effect: '飞行片刻或命中敌人后分裂为 6 枚碎片，每枚碎片造成 40% 攻击力的伤害。', weight: 25,
     color: 0xd8ff6a, kind: 'split', sfx: 'pistol',
   },
   saw: {
-    id: 'saw', name: '圆锯片', atk: 22, spd: 22, rng: 6, deg: 0, rc: 0.5, mods: { delay: 0.1 },
+    id: 'saw', name: '圆锯片', atk: 31, spd: 22, rng: 6, deg: 0, rc: 0.5, mods: { delay: 0.1 },
     effect: '缓慢飞行的锯片，无限穿透，持续切割接触的敌人，遇墙反弹。', weight: 25,
     color: 0xd0d6e0, kind: 'saw', sfx: 'saw', pierce: -1,
   },
   boomer: {
-    id: 'boomer', name: '回旋镖', atk: 54, spd: 32, rng: 5, deg: 0, rc: 0.8, mods: { delay: 0.04 },
+    id: 'boomer', name: '回旋镖', atk: 76, spd: 32, rng: 5, deg: 0, rc: 0.8, mods: { delay: 0.04 },
     effect: '飞出后会返回你的身边，往返都能造成伤害，无限穿透。', weight: 25, color: 0xffa83a, kind: 'boomer',
     sfx: 'saw', pierce: -1,
   },
   mine: {
-    id: 'mine', name: '感应地雷', atk: 180, spd: 10, rng: 8, deg: 0, rc: 0.3, mods: { delay: 0.12 },
+    id: 'mine', name: '感应地雷', atk: 180, spd: 10, rng: 4.8, deg: 0, rc: 0.3, mods: { delay: 0.12 },
     effect: '布置一枚地雷，敌人靠近时触发，片刻后爆炸。地雷最多存在 20 秒。', weight: 25, color: 0xff3a3a,
     kind: 'mine', sfx: 'thump',
   },
   toxic: {
-    id: 'toxic', name: '毒雾弹', atk: 18, spd: 28, rng: 7, deg: 5, rc: 0.8, mods: { reload: 0.06 },
+    id: 'toxic', name: '毒雾弹', atk: 18, spd: 28, rng: 4.2, deg: 5, rc: 0.8, mods: { reload: 0.06 },
     effect: '命中或飞行片刻后形成毒雾，4 秒内每秒对其中的敌人造成 3 倍攻击力的伤害。', weight: 25,
     color: 0x8aff3a, kind: 'toxic', sfx: 'thump',
   },
   light: {
-    id: 'light', name: '轻量化弹头', atk: 22, spd: 95, rng: 2, deg: 4, rc: 0.4, mods: { delay: -0.06, reload: -0.12 },
+    id: 'light', name: '轻量化弹头', atk: 31, spd: 95, rng: 2, deg: 4, rc: 0.4, mods: { delay: -0.06, reload: -0.12 },
     effect: '牺牲威力换来更快的射速与换弹。', weight: 25, color: 0xfff2b0, kind: 'bullet', sfx: 'pistol',
   },
   sniper: {
-    id: 'sniper', name: '钨芯穿甲弹', atk: 190, spd: 150, rng: 2.5, deg: -15, rc: 6, mods: { delay: 0.18, reload: 0.15 },
+    id: 'sniper', name: '钨芯穿甲弹', atk: 266, spd: 150, rng: 2.5, deg: -15, rc: 6, mods: { delay: 0.18, reload: 0.15 },
     effect: '高速穿甲弹，可以穿透 10 个单位，射程 42 米。', weight: 10, color: 0xe0f0ff, kind: 'bullet',
     sfx: 'heavy', pierce: 10, range: 42,
   },
   nova: {
-    id: 'nova', name: '环形弹幕', atk: 19, spd: 45, rng: 3, deg: 0, rc: 0, mods: { delay: 0.08 },
+    id: 'nova', name: '环形弹幕', atk: 27, spd: 45, rng: 3, deg: 0, rc: 0, mods: { delay: 0.08 },
     effect: '向四周 360° 射出 12 发子弹，射程 14 米。', weight: 25, color: 0xc08aff, kind: 'bullet', sfx: 'zap',
     count: 12, range: 14, flags: { ring: true },
   },
   beam: {
-    id: 'beam', name: '等离子射线', atk: 23, spd: 160, rng: 2, deg: -5, rc: 0.2, mods: { delay: -0.03 },
+    id: 'beam', name: '等离子射线', atk: 32, spd: 160, rng: 2, deg: -5, rc: 0.2, mods: { delay: -0.03 },
     effect: '高速等离子束，无限穿透，射程 15 米。', weight: 25, color: 0x5affff, kind: 'bullet', sfx: 'laser',
     pierce: -1, range: 15, flags: { beam: true },
   },
@@ -215,17 +217,17 @@ export const BULLETS: Record<BulletId, BulletDef> = {
     weight: 10, color: 0xa040ff, kind: 'singular', sfx: 'magic',
   },
   leech: {
-    id: 'leech', name: '吸血弹', atk: 38, spd: 70, rng: 3, deg: 0, rc: 0.8, mods: { reload: 0.02 },
+    id: 'leech', name: '吸血弹', atk: 53, spd: 70, rng: 3, deg: 0, rc: 0.8, mods: { reload: 0.02 },
     effect: '每次命中回复相当于所造成伤害 4% 的生命值（每发最多 3 点）。', weight: 10, color: 0xff2a5a,
     kind: 'bullet', sfx: 'pistol', flags: { leech: true },
   },
   gold: {
-    id: 'gold', name: '招财弹', atk: 33, spd: 70, rng: 3, deg: 0, rc: 0.8, mods: {},
+    id: 'gold', name: '招财弹', atk: 46, spd: 70, rng: 3, deg: 0, rc: 0.8, mods: {},
     effect: '被该子弹击杀的丧尸必定掉落一件随机道具。每个区域最多触发 4 次，装填多发招财弹也一样。', weight: 10, color: 0xffd700, kind: 'bullet', sfx: 'pistol',
     flags: { gold: true },
   },
   jet: {
-    id: 'jet', name: '喷射推进弹', atk: 4, spd: 40, rng: 3, deg: 0, rc: 45, mods: { delay: -0.04, reload: -0.06 },
+    id: 'jet', name: '喷射推进弹', atk: 6, spd: 40, rng: 3, deg: 0, rc: 45, mods: { delay: -0.04, reload: -0.06 },
     effect: '几乎没有伤害，但后坐力惊人——朝身后开火可以高速位移。', weight: 10, color: 0x6ac8ff, kind: 'bullet',
     sfx: 'launcher', range: 6,
   },
@@ -236,7 +238,7 @@ export const BULLETS: Record<BulletId, BulletDef> = {
     flags: { mystery: true },
   },
   corn: {
-    id: 'corn', name: '玉米粒', atk: 22, spd: 90, rng: 1.5, deg: 5, rc: 1.8, mods: { delay: 0.05, reload: -0.07 },
+    id: 'corn', name: '玉米粒', atk: 31, spd: 90, rng: 1.5, deg: 5, rc: 1.8, mods: { delay: 0.05, reload: -0.07 },
     effect: '发射一颗轻量小型的子弹，但有 12% 的概率变为黄油：黄油的攻击力为玉米粒的 7 倍，命中时让附近小范围的敌人晕眩 6 秒。',
     weight: 25, color: 0xffd84a, kind: 'bullet', sfx: 'pistol', flags: { butter: 0.12 },
   },

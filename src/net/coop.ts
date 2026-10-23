@@ -96,6 +96,10 @@ export class Coop implements NetHooks {
     else this.qHost.push({ k: 'hu', e: src, d: r1(dmg) });
   }
 
+  ffHurt(dmg: number): void {
+    this.qAll.push({ k: 'ffh', d: r1(dmg) });
+  }
+
   questIgnite(i: number): void {
     this.qHost.push({ k: 'qi', i });
   }
@@ -223,7 +227,7 @@ export class Coop implements NetHooks {
         const b = w.boss;
         this.qAll.push({
           k: 'bs', s: b.stateIndex(), an: b.anim, en: b.enraged ? 1 : 0, tp: r2(b.throwPose),
-          tl: b.telegraphs.map(encodeTele), fn: b.final ? 1 : 0,
+          tl: b.telegraphs.map(encodeTele), fn: b.final ? 1 : 0, dr: r2(b.shield.dr),
         });
       }
     }
@@ -411,6 +415,8 @@ export class Coop implements NetHooks {
         if (id !== this.myId) this.hurtFx(id);
         break;
       }
+      // 第4.3次调整：队友受到友伤，在他身上显示红色跳字
+      case 'ffh': if (r && !r.dead && ev.d > 0) w.fx.damageNumber(r.x, r.y, Number(ev.d), '#ff4a4a', false); break;
       case 'qi': if (this.isHost) w.quests.ignite(ev.i, false); break;
       case 'qk': if (this.isHost) w.quests.onKick(ev.i, ev.x, ev.y, ev.vx, ev.vy); break;
       case 'ra': if (from === this.hostId) w.applyRadAvg(Number(ev.v) || 0); break;
@@ -433,7 +439,13 @@ export class Coop implements NetHooks {
         w.applyWorldState(ev.cd, ev.ct, String(ev.info ?? ''), ev.zt);
         if (Array.isArray(ev.q)) w.quests.applyNet(ev.q);
         break;
-      case 'bs': if (from === this.hostId && w.boss?.mirror) w.boss.applyState(ev.s, ev.an, !!ev.en, ev.tp, ev.tl, ev.fn); break;
+      case 'bs':
+        if (from === this.hostId && w.boss?.mirror) {
+          w.boss.applyState(ev.s, ev.an, !!ev.en, ev.tp, ev.tl, ev.fn);
+          // v4.3.7：转阶段的伤害减免
+          w.boss.shield.dr = Number(ev.dr) || 0;
+        }
+        break;
       case 'fx': if (from === this.hostId) w.applyFx(ev.n, ev.a); break;
       case 'claim':
         if (!this.isHost) break;
@@ -445,8 +457,8 @@ export class Coop implements NetHooks {
       case 'drop': {
         if (!this.inBounds(ev.x, ev.y) || w.pickups.find(ev.uid)) break;
         const it = w.pickups.dropThing(reuid(ev.th as WorldThing), ev.x, ev.y, !!ev.auto, ev.uid, false);
-        // 房主补充的地图道具：和区域开始时的一样，走近之后才显示在小地图上
-        if (ev.mp) { it.map = true; it.seen = false; }
+        // v4.3.6：丧尸掉落的地图道具，每名玩家都可以各拿一次
+        if (ev.mp) it.map = true;
         break;
       }
       case 'rev': w.revived(this.name(from)); break;

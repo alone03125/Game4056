@@ -1,25 +1,30 @@
 // 规则测试：第3次调整（枪械修饰语、参数硬下限、道具前缀、Rarity5、金币公式）与第4次调整（盲盒、玉米粒、苦力怕、奇点吸引投掷物、安全屋试枪、拉起无敌），
 // 以及第4.1次调整（权重、新模块、全局强化零件1型、招财弹、临时整备区、区域任务、奇物宝箱与奇物、联机本地判定碰撞伤害）；
 // 第4.2次调整更新了权重、盲盒、模块的攻击倍率与瘴气的完成比例，删除了熔炼模块；
-// 第4.3次调整：追踪模块与环形弹幕、增幅模块的散射、奇物的削弱与新奇物、曼巴僵尸的耐久战、区域倍率与宝箱生命。
+// 第4.3次调整：追踪模块与环形弹幕、增幅模块的散射、奇物的削弱与新奇物、曼巴僵尸的耐久战、区域倍率与宝箱生命；
+// v4.3.5：防护服的属性补正、聚精会神的叠层、伤害跳字、子弹的攻击力与范围、苦力怕倒计时中的移速、友伤跳字；
+// v4.3.6：丧尸被杀死时掉落地图道具（概率逐次减半，联机时每人各拿一次）；
+// v4.3.7：Boss 转阶段的伤害减免与分界线截断、Boss 生命、奇点弹的范围、耐久战时长、Boss 战的音频文件音效、结算标题的判定。
 // 用法：npx esbuild tools/modtest.ts --bundle --platform=node --outfile=tools/.modtest.cjs && node tools/.modtest.cjs
 import { RunState } from '../src/game/state';
 import { World } from '../src/game/world';
-import { nullFx } from '../src/game/fx';
+import { nullFx, VO } from '../src/game/fx';
 import { BULLETS, BULLET_IDS, BulletId, makeBullet, RARE_BULLETS } from '../src/data/bullets';
 import { castOnce, GUN_MODS, gunStats, makeFixedGun, makeGun, rollRarity } from '../src/data/guns';
 import { altarBuy, altarValue, buyBullet, buyGun } from '../src/game/shop';
 import { bulletToSlot, moveItem } from '../src/game/inventory';
 import { QUEST, QUEST_IDS, questOrder, QuestId } from '../src/game/quest';
 import { Coop } from '../src/net/coop';
-import { isNormalZombie } from '../src/game/enemies';
+import { isNormalZombie, MAP_DROP } from '../src/game/enemies';
 import { MemHub } from '../src/net/transport';
 import { itemValue, makeConsumable, rollGrade } from '../src/data/items';
-import { CHEST_HP, CREEPER, enhanceCoef, ZONES } from '../src/config';
+import { BOSS, CHEST_HP, COOP_HP_MUL, CREEPER, DIFFICULTY, enhanceCoef, MAMBA, PLAYER, ZONES } from '../src/config';
+import { Boss, BOSS_SHIELD } from '../src/game/boss';
 import { Mamba, MAMBA_CINE } from '../src/game/mamba';
 import { QTE, RELIC, RELIC_IDS } from '../src/data/relics';
-import { CORE_PURIFY } from '../src/game/world';
-import { ITEM_REFILL } from '../src/game/pickups';
+import { CORE_PURIFY, suitBoost } from '../src/game/world';
+import { dmgText } from '../src/render/overlay';
+import type { Fx } from '../src/game/fx';
 import { Rng } from '../src/util/rng';
 
 let fails = 0;
@@ -48,7 +53,7 @@ function freshWorld() {
   for (let i = 0; i < 30 && w.projs.list.length === 0; i++) w.update(1 / 60, true);
   const pr = w.projs.list[0];
   check('凶险：子弹朝身后飞', !!pr && pr.vx < 0, pr ? `vx=${pr.vx.toFixed(1)}` : 'no proj');
-  check('凶险：伤害 ×1.44', !!pr && Math.abs(pr.dmg - 60 * 1.44) < 0.5, pr ? `dmg=${pr.dmg.toFixed(1)}` : '');
+  check('凶险：伤害 ×1.44', !!pr && Math.abs(pr.dmg - BULLETS.std.atk * 1.44) < 0.5, pr ? `dmg=${pr.dmg.toFixed(1)}` : '');
 }
 // 2. 强劲：击退力度随伤害增加；后坐力 ×1.4
 {
@@ -235,7 +240,7 @@ const fireOnce = (w: World, defs: string[], hand = 0) => {
   for (let i = 0; i < 130 && !c2.dead; i++) w2.update(1 / 60, true);
   const coin2 = w2.pickups.coins[k0];
   check('被打死的苦力怕爆炸后掉落约 34 金币', c2.dead && !!coin2 && coin2.amount >= 30 && coin2.amount <= 38, coin2 ? String(coin2.amount) : 'none');
-  check('倒计时中移速降为 3.2（相对 4.6）', Math.abs(CREEPER.fuseSpeed / 4.6 - 0.6957) < 0.001);
+  check('倒计时中移速降为 2.2（v4.3.5：3.2 再降低约 30%）', CREEPER.fuseSpeed === 2.2);
 }
 // 12. 奇点会吸引炸弹和丧尸的口水
 {
@@ -338,7 +343,7 @@ const fireMag = (w: World, g: ReturnType<typeof freshGun>) => {
   const split = fireMag(w, freshGun(['mSplit2', 'std']));
   check('二重分裂模块：射出 2 枚', split.projs.length === 2, String(split.projs.length));
   const shine = fireMag(w, freshGun(['mShine', 'std']));
-  check('闪耀虹彩模块：伤害 ×1.25×1.6（攻击倍率 -0.20x）、带特效', shine.projs.length === 1 && Math.abs(shine.projs[0].dmg - 60 * 1.25 * 1.6 * 0.8) < 0.5 && shine.projs[0].fancy === 3, shine.projs[0]?.dmg?.toFixed(1));
+  check('闪耀虹彩模块：伤害 ×1.25×1.6（攻击倍率 -0.20x）、带特效', shine.projs.length === 1 && Math.abs(shine.projs[0].dmg - BULLETS.std.atk * 1.25 * 1.6 * 0.8) < 0.5 && shine.projs[0].fancy === 3, shine.projs[0]?.dmg?.toFixed(1));
   const g = freshGun(['mPre', 'std']);
   const pre = gunStats(g);
   check('预行程模块：换弹 -30%、攻击倍率 -0.20x', Math.abs(pre.reload - Math.max(0.25, g.reload * 0.7)) < 1e-9 && Math.abs(pre.atk - 0.8) < 1e-9, `${g.reload} → ${pre.reload}`);
@@ -361,12 +366,13 @@ const fireMag = (w: World, g: ReturnType<typeof freshGun>) => {
 {
   const w = freshWorld();
   w.zoneStarted = false;
-  const items0 = w.pickups.items.filter((i) => !i.dead).length;
+  // 只数招财弹的掉落（v4.3.6 起丧尸还会随机掉落地图道具）
+  const items0 = w.pickups.items.filter((i) => !i.dead && !i.map).length;
   for (let i = 0; i < 6; i++) {
     const e = w.enemies.spawn('office', w.player.x + 6 + i, w.player.y + 4, 0);
     w.enemies.damage(e, 1e6, { gold: true });
   }
-  const got = w.pickups.items.filter((i) => !i.dead).length - items0;
+  const got = w.pickups.items.filter((i) => !i.dead && !i.map).length - items0;
   check('招财弹：每区最多掉落 4 件道具', got === 4, String(got));
 }
 // 18. 临时整备区：背包满时买的东西进临时整备区，关闭界面 / 离开安全屋时掉在地上
@@ -574,8 +580,8 @@ const tick = (w: World, sec: number, each?: () => void) => { for (let i = 0; i <
 }
 // 22. 第4.3次调整：模块、新奇物与数值
 {
-  check('环形弹幕 19 / 感应地雷 180 / 炸弹 160', BULLETS.nova.atk === 19 && BULLETS.mine.atk === 180 && BULLETS.bomb.atk === 160);
-  check('区域倍率：第二区 1.4~2.4 … 第六区 5.0~6.0', ZONES.map((z) => z.hpMul.join('~')).join(' ') === '0.6~1.6 1.4~2.4 2.2~4.5 3~6 4~6 5~6');
+  check('环形弹幕 27（v4.3.5：19 × 1.4）/ 感应地雷 180 / 炸弹 160', BULLETS.nova.atk === 27 && BULLETS.mine.atk === 180 && BULLETS.bomb.atk === 160);
+  check('区域倍率：第二区 1.2~2.2 … 第六区 3.0~6.0（v4.3.4）', ZONES.map((z) => z.hpMul.join('~')).join(' ') === '0.6~1.6 1.2~2.2 1.8~3.2 2.6~4.5 3~4.5 3~6');
   check('奇物宝箱生命 2000 / 3500 / 6500 / 10000', CHEST_HP.slice(2).join('/') === '2000/3500/6500/10000');
   check('隐秘核心前的净化血清每人 2 支', CORE_PURIFY.perPlayer === 2);
   check('清除瘴气的净化半径缩小 20%', Math.abs(QUEST.miasmaR - 4.2 * 0.8) < 1e-9);
@@ -610,7 +616,8 @@ const tick = (w: World, sec: number, each?: () => void) => { for (let i = 0; i <
   const a0 = run.atkBonus(), s0 = w.player.speed();
   w.relicFx.offer = ['focus', 'crit', 'bow'];
   w.relicFx.choose('focus');
-  check('聚精会神：获得时 2 枚代币（攻击倍率 +0.20x、移速 +6%）', run.focusTokens === 2 && Math.abs(run.atkBonus() - a0 - 0.2) < 1e-9 && Math.abs(w.player.speed() / s0 - 1.06) < 1e-9);
+  check('聚精会神：每枚代币 +5% / +0.15x，普通判定最多 6 枚', RELIC.focusSpeed === 0.05 && RELIC.focusAtk === 0.15 && RELIC.focusMax === 6);
+  check('聚精会神：获得时 2 枚代币（攻击倍率 +0.10x、移速 +4%）', run.focusTokens === 2 && Math.abs(run.atkBonus() - a0 - 0.1) < 1e-9 && Math.abs(w.player.speed() / s0 - 1.04) < 1e-9);
   run.focusTokens = 0;
   check('聚精会神：没有代币时 -0.20x、-6%', Math.abs(run.atkBonus() - a0 + 0.2) < 1e-9 && Math.abs(w.player.speed() / s0 - 0.94) < 1e-9);
   run.focusTokens = 2;
@@ -623,6 +630,16 @@ const tick = (w: World, sec: number, each?: () => void) => { for (let i = 0; i <
     for (let i = 0; i < 300 && q.ang < q.start + 0.02; i++) w.update(1 / 120, true);
     w.relicFx.qtePress();
     check('聚精会神：完美判定 +1 枚代币', q.res === 'great' && run.focusTokens === 3, `${q.res} ${run.focusTokens}`);
+    // 普通判定 +1（最多 6 枚），完美判定不受上限限制
+    const rf = w.relicFx as any;
+    run.focusTokens = 5;
+    rf.qte = { ...q, res: null, resT: 0 };
+    rf.resolve('good'); const n1 = run.focusTokens;
+    rf.resolve('good'); const n2 = run.focusTokens;
+    rf.resolve('great'); const n3 = run.focusTokens;
+    rf.resolve('good'); const n4 = run.focusTokens;
+    check('聚精会神：普通判定 +1 枚（最多 6 枚），完美判定可以超过 6 枚', n1 === 6 && n2 === 6 && n3 === 7 && n4 === 7, `${n1} ${n2} ${n3} ${n4}`);
+    run.focusTokens = 3;
     w.relicFx.qte = null;
     w.relicFx.qteT = 0;
     w.update(1 / 60, true);
@@ -640,6 +657,8 @@ const tick = (w: World, sec: number, each?: () => void) => { for (let i = 0; i <
   const mb = new Mamba(w, e);
   w.boss = mb;
   w.bossEnemy = e;
+  // v4.3.7：一次伤害不会越过阶段分界线，先把生命压到最后一条分界线以下
+  e.hp = e.maxHp * 0.1;
   w.enemies.damage(e, e.maxHp * 2, null);
   check('曼巴僵尸：生命归零时没有死亡，而是倒地并开始过场动画', !e.dead && mb.state === 'down' && !!w.cine);
   check('曼巴僵尸：过场动画中免疫伤害', !w.enemies.damage(e, 100, null) && e.hp === 0);
@@ -673,43 +692,46 @@ function pair(n = 2) {
   return { ws, coops, step };
 }
 
-// 24. 第4.3次调整：联机时把地图道具补满 6 个
+// 24. 第4.3次调整：联机时地图道具每名玩家都可以各拿一次；丧尸掉落、丢下的物品仍然只能被一个人拿走
 {
   const { ws, step } = pair();
   const [host, cli] = ws;
-  host.zoneStarted && host.enemies.clearAll();
+  host.zoneStarted = false;
+  host.enemies.clearAll();
   step(30);
   const mapItems = (w: World) => w.pickups.items.filter((it) => !it.dead && it.map);
-  check('区域开始时 15 个地图道具', mapItems(host).length === 15, String(mapItems(host).length));
-  // 拿走 12 个（只剩 3 个）
-  const list = mapItems(host);
-  for (let i = 0; i < 12; i++) list[i].dead = true;
-  step(90);
-  const after = mapItems(host);
-  check('不足 6 个时补到 6 个', after.length === ITEM_REFILL.min, String(after.length));
-  const views = [host.player, cli.player];
-  const fresh = after.filter((it) => !list.slice(0, 15).includes(it));
-  check('补充了 3 个新道具', fresh.length === 3, String(fresh.length));
-  check('补充的位置都在两名玩家的视野外', fresh.every((it) => views.every((v) => Math.abs(it.x - v.x) > ITEM_REFILL.viewX || Math.abs(it.y - v.y) > ITEM_REFILL.viewY)));
-  check('补充的位置都能走到', fresh.every((it) => host.nav.reachable(it.x, it.y)));
-  check('其他玩家也收到了补充的道具（小地图上暂不显示）', fresh.every((it) => { const c = cli.pickups.find(it.uid); return !!c && !!c.map && !c.seen; }));
-  // 只剩 1 名存活玩家时不再补充
-  cli.player.alive = false;
+  check('两名玩家各有同样的 15 个地图道具', mapItems(host).length === 15 && mapItems(cli).length === 15
+    && mapItems(host).every((it) => { const c = cli.pickups.find(it.uid); return !!c && c.thing.kind === it.thing.kind; }));
+  const it0 = mapItems(host)[0];
+  const hFound = host.run.stats.itemsFound, cFound = cli.run.stats.itemsFound;
+  host.pickups.tryPickup(it0);
   step(30);
-  check('房主收到队友阵亡', (host.net as Coop).remoteList()[0].dead);
-  for (const it of mapItems(host)) it.dead = true;
-  step(90);
-  check('只剩 1 名存活玩家时不补充', mapItems(host).length === 0, String(mapItems(host).length));
+  check('房主拿走地图道具后，队友那里的这件道具还在', host.pickups.find(it0.uid) === null && !!cli.pickups.find(it0.uid));
+  const c0 = cli.pickups.find(it0.uid)!;
+  cli.pickups.tryPickup(c0);
+  check('队友在本地直接拿到同一件地图道具（不需要房主同意）', c0.dead && c0.pending <= 0);
+  step(30);
+  check('两人都拿到了这件道具', host.run.stats.itemsFound === hFound + 1 && cli.run.stats.itemsFound === cFound + 1, `${host.run.stats.itemsFound - hFound} / ${cli.run.stats.itemsFound - cFound}`);
+  // 丢下的物品：只能被一个人拿走
+  const rng = new Rng(9);
+  const dropped = host.pickups.dropThing(makeBullet('std', rng, 1), host.player.x + 40, host.player.y, true);
+  step(30);
+  const dc = cli.pickups.find(dropped.uid);
+  check('丢下的物品会同步给队友', !!dc && !dc.map);
+  if (dc) cli.pickups.tryPickup(dc);
+  step(30);
+  check('丢下的物品被队友拿走后，房主那里也消失', host.pickups.find(dropped.uid) === null && cli.pickups.find(dropped.uid) === null);
 }
-// 25. 单人模式不补充地图道具
+// 25. 第4.3次调整：联机时金币也从全图吸取；丧尸的人数生命倍率 2 人 ×1.2、3 人 ×1.4、4 人 ×1.6
 {
-  const run = new RunState(5, 'normal');
-  const w = new World(run, nullFx, { damageNumbers: false }, ev);
-  w.start();
-  w.enemies.clearAll();
-  for (const it of w.pickups.items) it.dead = true;
-  for (let i = 0; i < 120; i++) w.update(1 / 60, true);
-  check('单人模式不补充地图道具', w.pickups.items.filter((it) => !it.dead && it.map).length === 0);
+  check('联机丧尸生命倍率 1.2 / 1.4 / 1.6', COOP_HP_MUL.slice(2).join('/') === '1.2/1.4/1.6');
+  const { ws, step } = pair();
+  const cli = ws[1];
+  check('联机时金币的吸取范围是全图', cli.goldMagnet() === Infinity);
+  const g0 = cli.run.gold;
+  cli.pickups.dropGold(cli.player.x + 60, cli.player.y, 10);
+  step(300);
+  check('60 米外的金币也会飞到身上', cli.run.gold === g0 + 10, `${g0} → ${cli.run.gold}`);
 }
 // 26. 联机：曼巴僵尸的过场动画与耐久战同步
 {
@@ -724,6 +746,7 @@ function pair(n = 2) {
   host.bossEnemy = e; host.boss = new Mamba(host, e);
   step(30);
   check('镜像端出现曼巴', !!cli.boss && cli.boss.kind === 'mamba');
+  e.hp = e.maxHp * 0.1;
   host.enemies.damage(e, e.maxHp * 2, null);
   step(10);
   check('其他玩家也开始了过场动画', !!host.cine && !!cli.cine);
@@ -737,8 +760,209 @@ function pair(n = 2) {
   cli.run.rad = 999; const h = cli.run.hp; cli.run.invulnT = 0;
   for (let i = 0; i < 60; i++) { cli.update(1 / 60, true); }
   check('镜像端辐射不扣血', cli.run.hp === h);
-  step(37 * 60);
+  step((MAMBA_CINE.finalTime + 1) * 60);
   check('计时结束：双方胜利', host.phase === 'victory' && cli.phase === 'victory', `${host.phase} ${cli.phase}`);
   void coops;
+}
+// 27. v4.3.5：防护服的属性补正、伤害跳字、子弹的攻击力与范围、友伤跳字
+{
+  // 防护服的属性补正
+  const eq = (b: { hp: number; speed: number }, hp: number, sp: number) => Math.abs(b.hp - hp) < 1e-6 && Math.abs(b.speed - sp) < 1e-6;
+  check('II 级：生命上限与移速分别补到 140 / 4.5', eq(suitBoost(2, 100, 4.0), 40, 0.5) && eq(suitBoost(2, 150, 4.2), 0, 0.3) && eq(suitBoost(2, 150, 4.6), 0, 0));
+  check('III 级：两项都不足时补到 180 / 5.0', eq(suitBoost(3, 170, 4.8), 10, 0.2) && eq(suitBoost(3, 140, 4.5), 40, 0.5));
+  check('III 级：只有一项不足时固定 +15 / +0.2；都不缺时没有补正', eq(suitBoost(3, 170, 5.2), 15, 0.2) && eq(suitBoost(3, 200, 4.9), 15, 0.2) && eq(suitBoost(3, 190, 5.2), 0, 0));
+  check('IV 级：220 / 5.7；V 级没有补正', eq(suitBoost(4, 200, 6), 20, 0) && eq(suitBoost(4, 230, 5.0), 0, 0.7) && eq(suitBoost(5, 100, 4), 0, 0));
+  const w = freshWorld();
+  const floats: string[] = [];
+  w.fx = { ...nullFx, floatText: (_x: number, _y: number, s: string) => { floats.push(s); } } as Fx;
+  w.phase = 'safehouse';
+  w.safehouseZone = 1;
+  const run = w.run;
+  run.hp = 80;
+  w.takeSuit();
+  w.phase = 'explore';
+  check('换上 II 级防护服：生命上限 100 → 140、基础移速 4.0 → 4.5', run.suit === 2 && run.maxHp === 140 && run.hp === 120 && Math.abs(run.baseSpeed() - 4.5) < 1e-9, `${run.maxHp} ${run.hp} ${run.baseSpeed()}`);
+  check('先弹出防护服，增幅还没弹出', floats.join('|') === 'II 级防护服');
+  for (let i = 0; i < 60; i++) w.update(1 / 60, true);
+  check('之后依次弹出生命上限与移动速度的增幅', floats.join('|') === 'II 级防护服|生命上限 +40|移动速度 +0.5', floats.join('|'));
+  w.safehouseZone = 2;
+  run.speedPct = (5.2 / PLAYER.speed - 1) * 100;
+  floats.length = 0;
+  w.phase = 'safehouse';
+  w.takeSuit();
+  w.phase = 'explore';
+  for (let i = 0; i < 60; i++) w.update(1 / 60, true);
+  check('换上 III 级防护服：只有生命上限不足，固定 +15 / +0.2', run.maxHp === 155 && Math.abs(run.baseSpeed() - 5.4) < 1e-9 && floats.join('|') === 'III 级防护服|生命上限 +15|移动速度 +0.2', floats.join('|'));
+  // 伤害跳字
+  check('伤害跳字：不足 1000 显示 1 位小数', dmgText(12.34) === '12.3' && dmgText(7) === '7.0' && dmgText(999.94) === '999.9');
+  check('伤害跳字：1000 以上写成带千位分隔符的整数', dmgText(999.96) === '1,000' && dmgText(1234.4) === '1,234' && dmgText(1234567) === '1,234,567');
+  // 子弹
+  const OLD_ATK: Record<string, number> = {
+    std: 60, brass: 45, lead: 120, tri: 24, buck: 20, ricochet: 48, homing: 42, fire: 33, cryo: 33, chain: 54, split: 62,
+    saw: 22, boomer: 54, light: 22, sniper: 190, nova: 19, beam: 23, leech: 38, gold: 33, jet: 4, corn: 22,
+  };
+  // v4.3.7：奇点弹的大小改回 7（不再 -40%）
+  const OLD_AOE: Record<string, [number, number, number?]> = { bomb: [160, 9], rocket: [240, 7], mine: [180, 8], toxic: [18, 7], singular: [13, 7, 1] };
+  const bad = Object.entries(OLD_ATK).filter(([id, a]) => Math.abs(BULLETS[id as BulletId].atk / a - 1.4) > (a < 10 ? 0.15 : 0.03));
+  check('没有范围伤害的子弹攻击力约 +40%', bad.length === 0, bad.map(([id]) => id).join(','));
+  const bad2 = Object.entries(OLD_AOE).filter(([id, [a, r, k]]) => BULLETS[id as BulletId].atk !== a || Math.abs(BULLETS[id as BulletId].rng - r * (k ?? 0.6)) > 1e-9);
+  check('有范围伤害的子弹攻击力不变、基础大小 -40%（奇点弹 v4.3.7 改回 7）', bad2.length === 0, bad2.map(([id]) => id).join(','));
+  const plain = BULLET_IDS.filter((id) => !BULLETS[id].logic && !BULLETS[id].flags?.mystery);
+  check('所有子弹都在上面两张表里', plain.every((id) => id in OLD_ATK || id in OLD_AOE), plain.filter((id) => !(id in OLD_ATK || id in OLD_AOE)).join(','));
+  // 联机：友伤在队友那边显示红色跳字
+  const { ws, step } = pair();
+  const [host, cli] = ws;
+  const nums: [number, string][] = [];
+  host.fx = { ...nullFx, damageNumber: (_x: number, _y: number, a: number, c: string) => { nums.push([a, c]); } } as Fx;
+  step(10);
+  (cli as any).__god = false;
+  cli.run.invulnT = 0;
+  cli.friendlyFire(200, cli.player.x + 1, cli.player.y);
+  (cli as any).__god = true;
+  step(10);
+  check('联机：队友受到友伤时，在他身上显示红色跳字', nums.some(([a, c]) => Math.abs(a - 10) < 0.05 && c === '#ff4a4a'), JSON.stringify(nums));
+}
+// 28. v4.3.6：丧尸被杀死时掉落地图道具，本区每掉落一次概率减半；联机时每人各拿一次
+{
+  check('掉落概率 2%，每次掉落后减半', MAP_DROP.chance === 0.02 && MAP_DROP.decay === 0.5);
+  const w = freshWorld();
+  check('区域开始时概率为 2%', w.enemies.mapDropP === 0.02);
+  w.enemies.mapDropP = 1;
+  const n0 = w.pickups.items.length;
+  const z = w.enemies.spawn('office', w.player.x + 6, w.player.y, 0);
+  w.enemies.damage(z, 1e6, null);
+  const got = w.pickups.items.slice(n0);
+  check('丧尸被杀死时掉落一件地图道具', got.length === 1 && !!got[0].map && got[0].auto, String(got.length));
+  check('掉落后本区的概率减半', w.enemies.mapDropP === 0.5);
+  w.enemies.mapDropP = 1;
+  const c = w.enemies.spawn('creeper', w.player.x + 8, w.player.y, 0);
+  w.enemies.damage(c, 1e6, null);
+  for (let i = 0; i < 150 && !c.dead; i++) w.update(1 / 60, true);
+  check('苦力怕爆炸后也会掉落', c.dead && w.enemies.mapDropP === 0.5 && w.pickups.items.filter((it) => it.map && !it.dead).length >= 1);
+  // 统计：本区掉落概率逐次减半，杀很多丧尸也只会掉落少数几件
+  const w2 = freshWorld();
+  const m0 = w2.pickups.items.length;
+  for (let i = 0; i < 3000; i++) { const o = w2.enemies.spawn('office', w2.player.x + 30, w2.player.y, 0); w2.enemies.damage(o, 1e6, null); }
+  const drops = w2.pickups.items.length - m0;
+  check('连杀 3000 只：掉落次数与概率相符（每次掉落后减半）', drops >= 2 && drops <= 9 && Math.abs(w2.enemies.mapDropP - 0.02 * 0.5 ** drops) < 1e-12, `${drops} 件，当前概率 ${(w2.enemies.mapDropP * 100).toFixed(3)}%`);
+  w2.enemies.reset();
+  check('换区后概率恢复为 2%', w2.enemies.mapDropP === 0.02);
+  // 联机：每名玩家都可以各拿一次
+  const { ws, step } = pair();
+  const [host, cli] = ws;
+  host.zoneStarted = false;
+  host.enemies.clearAll();
+  step(10);
+  host.enemies.mapDropP = 1;
+  const h0 = host.pickups.items.length, c0 = cli.pickups.items.length;
+  const hz = host.enemies.spawn('office', host.player.x + 5, host.player.y, 0);
+  host.enemies.damage(hz, 1e6, null);
+  step(10);
+  const hi = host.pickups.items.slice(h0).find((it) => it.map);
+  const ci = hi && cli.pickups.find(hi.uid);
+  check('联机：队友那里也出现这件地图道具', !!hi && !!ci && !!ci.map && cli.pickups.items.length === c0 + 1);
+  check('联机：其他玩家的掉落概率由房主结算', host.enemies.mapDropP === 0.5);
+  if (hi && ci) {
+    const hf = host.run.stats.itemsFound, cf = cli.run.stats.itemsFound;
+    host.pickups.tryPickup(hi);
+    step(20);
+    check('房主拿走后，队友那里的这件道具还在', !!cli.pickups.find(hi.uid) && !host.pickups.find(hi.uid));
+    cli.pickups.tryPickup(ci);
+    step(20);
+    check('两人都拿到了这件掉落的道具', host.run.stats.itemsFound === hf + 1 && cli.run.stats.itemsFound === cf + 1, `${host.run.stats.itemsFound - hf} / ${cli.run.stats.itemsFound - cf}`);
+  }
+}
+// 29. v4.3.7：Boss 转阶段的伤害减免、Boss 生命、奇点弹、耐久战时长、音频文件音效、结算标题
+{
+  check('转阶段减伤 80%，每秒 -4%', BOSS_SHIELD.max === 0.8 && BOSS_SHIELD.decay === 0.04);
+  check('普通难度：牢大每阶段 24000、曼巴 240000', BOSS.hpPerPhase * DIFFICULTY.normal.hp === 24000 && MAMBA.hp * DIFFICULTY.normal.hp === 240000);
+  check('奇点弹的大小改回 7', BULLETS.singular.rng === 7);
+  check('耐久战 52 秒：6.2 秒过场动画 + 52 秒 = 10 号音乐的 58.2 秒', MAMBA_CINE.finalTime === 52 && Math.abs(MAMBA_CINE.total + MAMBA_CINE.finalTime - 58.2) < 1e-9);
+  const voices: string[] = [];
+  const spy = () => ({ ...nullFx, voice: (ids: number[], d = 0) => { voices.push(ids.join(',') + (d ? '@' + d : '')); } }) as Fx;
+  // 牢大
+  const w = freshWorld();
+  (w as any).__god = true;
+  w.zoneStarted = false;
+  w.fx = spy();
+  const e = w.enemies.spawnBoss(w.player.x, w.player.y + 24, 'laoda');
+  check('单人普通难度：牢大总生命 96000', e.maxHp === 96000, String(e.maxHp));
+  const lb = new Boss(w, e);
+  w.boss = lb; w.bossEnemy = e;
+  w.enemies.damage(e, 1e7, null);
+  check('一次伤害停在 3/4 分界线下 1 点，减伤补满 80%', Math.abs(e.hp - (e.maxHp * 0.75 - 1)) < 1e-6 && lb.shield.dr === 0.8, `${e.hp} ${lb.shield.dr}`);
+  const h1 = e.hp;
+  w.enemies.damage(e, 1000, null);
+  check('减伤期间受到的伤害 -80%', Math.abs(h1 - e.hp - 200) < 1e-6, (h1 - e.hp).toFixed(2));
+  for (let i = 0; i < 300; i++) w.update(1 / 60, true);
+  check('5 秒后减伤降到约 60%', Math.abs(lb.shield.dr - 0.6) < 0.01, lb.shield.dr.toFixed(3));
+  check('召唤精英时播放 5 号音效', voices.includes(String(VO.teammates)), voices.join(' '));
+  voices.length = 0;
+  w.enemies.damage(e, 1e7, null);
+  check('减伤期间再次转阶段（半血狂暴）：重新补满 80%，播放 9 号音效', lb.enraged && lb.shield.dr === 0.8 && Math.abs(e.hp - (e.maxHp * 0.5 - 1)) < 1e-6 && voices.includes(String(VO.cantWrite)), voices.join(' '));
+  for (let i = 0; i < 21 * 60; i++) { lb.shield.tick(1 / 60); }
+  check('20 秒后减伤消退为 0', lb.shield.dr === 0);
+  const h2 = e.hp;
+  w.enemies.damage(e, 1000, null);
+  check('减伤消退后受到全额伤害', Math.abs(h2 - e.hp - 1000) < 1e-6);
+  // 冲刺释放时播放 4 号音效（蓄力时不播放）
+  voices.length = 0;
+  (lb as any).set('windElbow');
+  lb.telegraphs.push({ kind: 'line', x: e.x, y: e.y, a: 0, len: 17, r: 1.5, t: 0, dur: 1, dead: false });
+  w.update(1 / 60, true);
+  const windV = voices.length;
+  for (let i = 0; i < 90 && lb.state !== 'dash'; i++) w.update(1 / 60, true);
+  check('牢大：冲刺释放时播放 4 号音效，蓄力时不播放', windV === 0 && lb.state === 'dash' && voices.includes(String(VO.man)), voices.join(' '));
+  // Boss 战中受伤与倒下
+  (w as any).__god = false;
+  w.phase = 'boss';
+  voices.length = 0;
+  const p = w.player;
+  w.run.invulnT = 0;
+  for (let k = 0; k < 2; k++) { p.iframe = 0; w.damagePlayer(1, e.x, e.y); }
+  check('Boss 战中每受伤 2 次播放 2 号音效', voices.filter((v) => v === String(VO.laugh)).length === 1, voices.join(' '));
+  voices.length = 0;
+  p.iframe = 0;
+  w.damagePlayer(1e6, e.x, e.y);
+  check('在 Boss 战中倒下：依次播放 8、3 号音效，结算为“没肘过牢大”', voices.includes(`${VO.whatCanISay},${VO.mambaOut}@1.25`) && w.run.fellIn === 'laoda', voices.join(' ') + ' ' + w.run.fellIn);
+  // 牢大倒下（没有打开隐秘核心）：依次播放 2、1 号音效
+  const w2 = freshWorld();
+  w2.fx = spy();
+  voices.length = 0;
+  const e2 = w2.enemies.spawnBoss(w2.player.x, w2.player.y + 24, 'laoda');
+  w2.boss = new Boss(w2, e2); w2.bossEnemy = e2;
+  w2.onBossKilled(e2);
+  check('牢大倒下：依次播放 2、1 号音效', voices.includes(`${VO.laugh},${VO.years}@1.25`), voices.join(' '));
+  // 曼巴倒下：依次播放 2、3 号音效；转阶段 5 次
+  const w3 = freshWorld();
+  w3.fx = spy();
+  (w3.layout as any).index = 6;
+  voices.length = 0;
+  const e3 = w3.enemies.spawnBoss(w3.player.x, w3.player.y + 24, 'mamba');
+  const mb = new Mamba(w3, e3);
+  w3.boss = mb; w3.bossEnemy = e3;
+  check('曼巴：4 次召唤与半血狂暴，共 5 条阶段分界线', mb.shield.marks.join(',') === '0.8,0.6,0.5,0.4,0.2');
+  check('单人普通难度：曼巴总生命 240000', e3.maxHp === 240000, String(e3.maxHp));
+  w3.onBossKilled(e3);
+  check('曼巴倒下：依次播放 2、3 号音效', voices.includes(`${VO.laugh},${VO.mambaOut}@1.25`), voices.join(' '));
+  // 联机：减伤由房主同步给其他玩家
+  const { ws, step } = pair();
+  const [host, cli] = ws;
+  host.zoneStarted = false;
+  host.enemies.clearAll();
+  step(10);
+  const he = host.enemies.spawnBoss(host.player.x, host.player.y + 24, 'laoda');
+  host.bossEnemy = he; host.boss = new Boss(host, he);
+  step(30);
+  host.enemies.damage(he, 1e7, null);
+  step(12);
+  check('联机：其他玩家那里的 Boss 也获得了减伤', !!cli.boss && cli.boss.shield.dr > 0.75 && cli.boss.shield.dr <= 0.8, cli.boss ? cli.boss.shield.dr.toFixed(3) : 'no boss');
+  const ce = cli.bossEnemy!;
+  const ch0 = ce.hp;
+  cli.enemies.damage(ce, 1000, null);
+  check('联机：其他玩家本地预判的伤害同样减免', ch0 - ce.hp < 260 && ch0 - ce.hp > 150, (ch0 - ce.hp).toFixed(1));
+  const hh0 = he.hp;
+  step(10);
+  check('联机：房主按已减免的伤害结算（不重复减免）', hh0 - he.hp > 150 && hh0 - he.hp < 260, (hh0 - he.hp).toFixed(1));
 }
 console.log(fails ? `${fails} 项失败` : '全部通过');

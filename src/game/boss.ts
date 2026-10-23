@@ -4,8 +4,10 @@
 // 第2版联机：AI 只在房主处运行，追击最近的玩家；其他玩家的 Boss 处于镜像模式，只接收状态。
 // 第4.1次调整：Boss 的碰撞、冲刺等伤害改为由被打的玩家本地判定（镜像模式下的 mirrorHits）。
 // 第4.3次调整：接口增加曼巴僵尸耐久战需要的免疫、跃起与计时。
+// v4.3.7：生命 ×1.25（普通难度每阶段 24000）；转阶段时获得伤害减免（PhaseShield）；关键技能附带音频文件音效。
 
 import { BOSS } from '../config';
+import { VO } from './fx';
 import { damp, wrapAngle, clamp } from '../util/math';
 import { globalRng } from '../util/rng';
 import type { Enemy, EnemyShot } from './enemies';
@@ -30,6 +32,39 @@ export interface Telegraph {
   follow?: boolean; // 跟随 Boss 的位置
 }
 
+/**
+ * v4.3.7：Boss 转阶段的伤害减免。每次转阶段（召唤精英、狂暴……）时获得 80% 伤害减免，之后每秒下降 4 个百分点（20 秒消退完）；
+ * 减免期间再进入下一阶段会重新补满。一次伤害不会越过下一条阶段分界线（停在分界线下 1 点），
+ * 防止用特别强的配置一口气跳过几个阶段。
+ */
+export const BOSS_SHIELD = { max: 0.8, decay: 0.04 };
+
+export class PhaseShield {
+  /** 当前的伤害减免（0 ~ 0.8）；联机时由房主同步 */
+  dr = 0;
+
+  /** marks：各阶段的分界线（生命比例，从高到低） */
+  constructor(readonly marks: readonly number[]) {}
+
+  tick(dt: number): void {
+    if (this.dr > 0) this.dr = Math.max(0, this.dr - BOSS_SHIELD.decay * dt);
+  }
+
+  /** 截断一次伤害：会越过下一条分界线时停在分界线下 1 点，并补满减伤；返回截断后的伤害 */
+  clamp(e: Enemy, amount: number): number {
+    for (const m of this.marks) {
+      const line = e.maxHp * m;
+      if (e.hp <= line) continue;
+      if (e.hp - amount < line) {
+        this.dr = BOSS_SHIELD.max;
+        return Math.max(0, Math.min(amount, e.hp - line + 1));
+      }
+      break;
+    }
+    return amount;
+  }
+}
+
 /** 两种 Boss（牢大丧尸 / 曼巴僵尸）共用的接口：世界、联机与渲染只通过它访问 Boss */
 export interface BossAI {
   readonly kind: 'laoda' | 'mamba';
@@ -40,6 +75,8 @@ export interface BossAI {
   anim: number; // 动画：0 走 1 蓄力/施法 2 冲刺 3 投掷 4 眩晕 5 倒地 6 爬起 7 跃起在空中
   throwPose: number; // 投掷的姿势；爬起时为进度，跃起时为高度（0~1）
   telegraphs: Telegraph[];
+  /** v4.3.7：转阶段的伤害减免 */
+  readonly shield: PhaseShield;
   /** 第4.3次调整：曼巴僵尸的耐久战（免疫伤害，生命条变为计时条） */
   final: boolean;
   stateIndex(): number;
@@ -141,6 +178,8 @@ export class Boss implements BossAI {
   throwPose = 0;
   mirror: boolean;
   final = false;
+  /** v4.3.7：3/4 血（召唤）、半血（狂暴）、1/4 血（召唤）三次转阶段 */
+  readonly shield = new PhaseShield([0.75, 0.5, 0.25]);
   private focus: Target | null = null;
   private volley = 0; // 本轮还要投出的石头数
   private volleyT = 0;
@@ -180,6 +219,7 @@ export class Boss implements BossAI {
       this.enraged = true;
       this.w.fxAll('banner', '牢大丧尸狂暴化', '移动更快，攻击更加频繁', '#ff3a3a');
       this.w.fxAll('sound', 'bossRoar', e.x, e.y, 1);
+      this.w.fxAll('voice', VO.cantWrite);
       this.w.fxAll('shake', 0.8);
     }
     void amt;
@@ -283,6 +323,7 @@ export class Boss implements BossAI {
           this.dashHit.clear();
           this.set('dash');
           w.fxAll('sound', 'bossDash', e.x, e.y, 1);
+          w.fxAll('voice', VO.man);
         }
         break;
       }
@@ -353,6 +394,7 @@ export class Boss implements BossAI {
             w.enemies.spawn(type, x, y, tier);
             w.fxAll('smoke', x, y, 6);
           }
+          w.fxAll('voice', VO.teammates);
           this.set('chase');
           this.attackCd = 2;
         }

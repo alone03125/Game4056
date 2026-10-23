@@ -1,9 +1,31 @@
-// 音频：全部使用 WebAudio 实时合成（不依赖音频文件）。包含音效与程序化音乐。
+// 音频：音效与程序化音乐使用 WebAudio 实时合成。
+// v4.3.7：另外支持音频文件——src/audio 下以编号开头的 mp3 由 build.mjs 内嵌进页面（window.__AUDIO4056__ = { 编号: base64 }）。
+// 0 号与 10 号是 Boss 战的音乐（FileMusic），其余是音效（AudioEngine.voice）。这些文件没有放进公开仓库：
+// 缺少时对应的音乐与音效直接跳过，Boss 战仍使用程序化音乐。
 
 import type { SoundName } from '../game/fx';
 import type { ShotSfx } from '../data/bullets';
 
 type Ctx = AudioContext;
+
+const CLIP_DATA: Record<string, string> = (typeof window !== 'undefined' && (window as any).__AUDIO4056__) || {};
+/** 是音乐（用 <audio> 播放）而不是音效的编号 */
+const MUSIC_IDS = new Set([0, 10]);
+/** 音频文件音效的音量（相对音效总线） */
+const VOICE_VOL = 0.9;
+/** 音频文件音乐的音量（相对音乐总线；整首混音的响度比程序化音乐高） */
+const FILE_MUSIC_VOL = 0.8;
+
+export function hasClip(id: number): boolean {
+  return typeof CLIP_DATA[id] === 'string';
+}
+
+function clipBytes(id: number): Uint8Array {
+  const bin = atob(CLIP_DATA[id]);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+}
 
 export class AudioEngine {
   ctx: Ctx | null = null;
@@ -17,6 +39,10 @@ export class AudioEngine {
   listenerY = 0;
   volumes = { master: 0.8, music: 0.55, sfx: 0.8 };
   music: Music | null = null;
+  /** v4.3.7：音频文件的背景音乐 */
+  file: FileMusic | null = null;
+  private clips = new Map<number, AudioBuffer>();
+  private clipEnd = new Map<number, number>();
   private geigerT = 0;
   private heartT = 0;
 
@@ -46,6 +72,43 @@ export class AudioEngine {
     for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
     this.applyVolumes();
     this.music = new Music(this);
+    this.file = new FileMusic(this);
+    this.loadClips();
+  }
+
+  /** 解码音频文件音效（体积都很小，逐个异步解码，不阻塞画面） */
+  private loadClips(): void {
+    const ids = Object.keys(CLIP_DATA).map(Number).filter((id) => !MUSIC_IDS.has(id));
+    ids.forEach((id, i) => setTimeout(() => {
+      const ctx = this.ctx;
+      if (!ctx) return;
+      try {
+        const bytes = clipBytes(id);
+        ctx.decodeAudioData(bytes.buffer as ArrayBuffer).then((buf) => this.clips.set(id, buf), () => { /* 解码失败：跳过 */ });
+      } catch { /* */ }
+    }, 30 + i * 20));
+  }
+
+  /** v4.3.7：依次播放音频文件音效（前一个播完再播下一个），delay 秒后开始；solo = 同一个音效还在播放时不再重复 */
+  voice(ids: number[], delay = 0, solo = false): void {
+    const ctx = this.ctx;
+    if (!ctx) return;
+    let t = ctx.currentTime + Math.max(0, delay);
+    for (const id of ids) {
+      const buf = this.clips.get(id);
+      if (!buf) continue;
+      if (solo && (this.clipEnd.get(id) ?? 0) > ctx.currentTime) continue;
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      const g = ctx.createGain();
+      g.gain.value = VOICE_VOL;
+      src.connect(g);
+      g.connect(this.sfx);
+      src.onended = () => { try { g.disconnect(); } catch { /* */ } };
+      src.start(t);
+      this.clipEnd.set(id, t + buf.duration);
+      t += buf.duration + 0.05;
+    }
   }
 
   private muted = false;
@@ -643,3 +706,154 @@ class Music {
 }
 
 export type { Music };
+
+// —— 音频文件的背景音乐（v4.3.7）——
+
+interface Deck {
+  id: number;
+  el: HTMLAudioElement;
+  node: MediaElementAudioSourceNode;
+  gain: GainNode;
+  /** 游戏暂停时一起暂停（10 号音乐要和曼巴僵尸的耐久战计时同步） */
+  hold: boolean;
+}
+
+/** 播放到这些时间点（秒）时附带的音效：0 号音乐的 1:17 与 2:36 播放 7 号音效 */
+const MUSIC_CUES: Record<number, [number, number][]> = { 0: [[77, 7], [156, 7]] };
+
+/**
+ * Boss 战的音乐：用 <audio> 播放（不必把整首解码进内存），经过 WebAudio 的增益节点调节音量、淡入淡出。
+ * 同一时间只有一首“当前”的音乐；切换时旧的那首淡出后释放。
+ */
+export class FileMusic {
+  private cur: Deck | null = null;
+  private urls = new Map<number, string>();
+  private lastT = 0;
+  private held = false;
+  /** 游戏要求暂停（暂停菜单、背包……） */
+  private wantHold = false;
+  /** 最近一次游戏还在运行的时间：画面帧停下（页面切到后台等）超过 0.3 秒也算暂停 */
+  private aliveAt = 0;
+
+  constructor(private a: AudioEngine) {
+    window.setInterval(() => this.tick(), 50);
+    // 提前把音乐转成 Blob 地址，Boss 战开始时不再卡顿
+    for (const id of MUSIC_IDS) if (hasClip(id)) setTimeout(() => this.url(id), 400);
+  }
+
+  /** 当前播放的音乐编号（-1 = 没有） */
+  get id(): number {
+    return this.cur ? this.cur.id : -1;
+  }
+
+  private url(id: number): string {
+    let u = this.urls.get(id);
+    if (!u) {
+      u = URL.createObjectURL(new Blob([clipBytes(id) as BlobPart], { type: 'audio/mpeg' }));
+      this.urls.set(id, u);
+    }
+    return u;
+  }
+
+  /** 播放一首音乐：fade = 淡入时间；xfade = 正在播放的那首的淡出时间；loop = 循环；hold = 游戏暂停时一起暂停 */
+  play(id: number, o: { fade?: number; xfade?: number; loop?: boolean; hold?: boolean } = {}): boolean {
+    const ctx = this.a.ctx;
+    if (!ctx || !hasClip(id)) return false;
+    this.stop(o.xfade ?? 0.8);
+    const el = new Audio(this.url(id));
+    el.loop = !!o.loop;
+    el.preload = 'auto';
+    const node = ctx.createMediaElementSource(el);
+    const gain = ctx.createGain();
+    const now = ctx.currentTime;
+    gain.gain.setValueAtTime(0, now);
+    gain.gain.linearRampToValueAtTime(FILE_MUSIC_VOL, now + Math.max(0.02, o.fade ?? 0.3));
+    node.connect(gain);
+    gain.connect(this.a.musicBus);
+    this.cur = { id, el, node, gain, hold: !!o.hold };
+    this.lastT = -0.01;
+    this.held = false;
+    this.aliveAt = performance.now();
+    el.play().catch(() => { /* 浏览器拒绝自动播放：等下一次用户操作后 AudioContext 恢复 */ });
+    return true;
+  }
+
+  /** 调整当前音乐的音量（相对正常音量的倍率），ramp 秒内平滑过渡 */
+  volume(k: number, ramp = 0.8): void {
+    const d = this.cur, ctx = this.a.ctx;
+    if (!d || !ctx) return;
+    const g = d.gain.gain, now = ctx.currentTime;
+    g.cancelScheduledValues(now);
+    g.setValueAtTime(g.value, now);
+    g.linearRampToValueAtTime(FILE_MUSIC_VOL * k, now + Math.max(0.02, ramp));
+  }
+
+  /** 跳转到 t 秒（跳到的时间点上的音效也会播放） */
+  seek(t: number): void {
+    const d = this.cur;
+    if (!d) return;
+    d.el.currentTime = t;
+    this.lastT = t - 0.01;
+  }
+
+  /** 淡出并释放当前的音乐 */
+  stop(fade = 0.8): void {
+    const d = this.cur, ctx = this.a.ctx;
+    this.cur = null;
+    if (!d || !ctx) return;
+    const g = d.gain.gain, now = ctx.currentTime;
+    g.cancelScheduledValues(now);
+    g.setValueAtTime(g.value, now);
+    g.linearRampToValueAtTime(0, now + Math.max(0.02, fade));
+    setTimeout(() => {
+      d.el.pause();
+      d.el.removeAttribute('src');
+      try { d.node.disconnect(); d.gain.disconnect(); } catch { /* */ }
+    }, Math.max(0.02, fade) * 1000 + 100);
+  }
+
+  /**
+   * 游戏暂停 / 继续（每帧调用）：只影响需要与游戏计时同步的音乐（10 号）。
+   * 游戏停止调用（画面帧停下，比如单人时页面切到后台）超过 0.3 秒也视为暂停。
+   */
+  hold(paused: boolean): void {
+    this.wantHold = paused;
+    if (!paused) this.aliveAt = performance.now();
+    this.applyHold();
+  }
+
+  private applyHold(): void {
+    const d = this.cur;
+    if (!d || !d.hold) return;
+    const paused = this.wantHold || performance.now() - this.aliveAt > 300;
+    if (paused === this.held) return;
+    this.held = paused;
+    if (paused) d.el.pause();
+    else if (!d.el.ended) d.el.play().catch(() => { /* */ });
+  }
+
+  /** 让音乐与游戏计时同步：相差超过 0.25 秒时跳到 t 秒（游戏卡顿丢帧时计时会落后于真实时间） */
+  sync(id: number, t: number): void {
+    const d = this.cur;
+    if (!d || d.id !== id || this.held || t < 0 || d.el.ended) return;
+    const dur = d.el.duration;
+    if (Number.isFinite(dur) && t >= dur) return;
+    if (Math.abs(d.el.currentTime - t) > 0.25) d.el.currentTime = t;
+  }
+
+  /** 播放到指定时间点时附带音效（循环播放时每一遍都会触发） */
+  private tick(): void {
+    const d = this.cur;
+    if (!d) return;
+    this.applyHold();
+    const cues = MUSIC_CUES[d.id];
+    const t = d.el.currentTime;
+    if (cues) {
+      // 循环回到开头
+      if (t < this.lastT - 1) this.lastT = -0.01;
+      for (const [at, vo] of cues) if (this.lastT < at && t >= at) this.a.voice([vo]);
+    }
+    this.lastT = t;
+    if (d.el.ended && !d.el.loop) this.stop(0.05);
+  }
+}

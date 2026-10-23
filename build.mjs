@@ -2,6 +2,8 @@
 // 像素字体在构建时按游戏里实际用到的字符裁剪，以 base64 内嵌进页面，保证离线可用且体积很小。
 // 字体文件 assets/fonts/pixel4056.ttf 由 tools/merge-font.py 生成：汉字 = 缝合像素字体 Fusion Pixel 12px（OFL），
 // 数字与英文 = NoitaPixel（第3次调整）。
+// v4.3.7：src/audio 下以编号开头的 mp3（如“0.The Hills.mp3”）以 base64 写进 dist/audio.js（window.__AUDIO4056__），
+// 单文件版 HTML 直接内嵌；没有这些文件时不生成，游戏里对应的音乐与音效会被跳过。
 import * as esbuild from 'esbuild';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -58,11 +60,36 @@ async function fontCss() {
   return fontCache.css;
 }
 
+const AUDIO_DIR = 'src/audio';
+const audioCache = { key: '', js: '' };
+/** 音频文件：{ 编号: base64 }，按文件名与修改时间缓存 */
+function audioJs() {
+  if (!fs.existsSync(AUDIO_DIR)) return '';
+  const files = fs.readdirSync(AUDIO_DIR).filter((f) => /^\d+\..*\.mp3$/i.test(f));
+  const key = files.map((f) => `${f}:${fs.statSync(path.join(AUDIO_DIR, f)).mtimeMs}`).join('|');
+  if (key === audioCache.key) return audioCache.js;
+  const map = {};
+  let bytes = 0;
+  for (const f of files) {
+    const buf = fs.readFileSync(path.join(AUDIO_DIR, f));
+    map[parseInt(f, 10)] = buf.toString('base64');
+    bytes += buf.length;
+  }
+  audioCache.key = key;
+  audioCache.js = files.length ? `window.__AUDIO4056__=${JSON.stringify(map)};` : '';
+  if (files.length) console.log(`[build] audio clips: ${files.length} files, ${(bytes / 1024).toFixed(0)} KB`);
+  return audioCache.js;
+}
+
 async function writeHtml() {
   const css = await fontCss();
-  fs.writeFileSync(path.join(outDir, 'index.html'), htmlTemplate('<script src="game.js"></script>', css));
+  const audio = audioJs();
+  const audioFile = path.join(outDir, 'audio.js');
+  if (audio) fs.writeFileSync(audioFile, audio);
+  else if (fs.existsSync(audioFile)) fs.unlinkSync(audioFile);
+  fs.writeFileSync(path.join(outDir, 'index.html'), htmlTemplate(`${audio ? '<script src="audio.js"></script>\n' : ''}<script src="game.js"></script>`, css));
   const js = fs.readFileSync(path.join(outDir, 'game.js'), 'utf8').replace(/<\/script/g, '<\/script');
-  fs.writeFileSync(path.join(outDir, 'Game4056.html'), htmlTemplate(`<script>\n${js}\n</script>`, css));
+  fs.writeFileSync(path.join(outDir, 'Game4056.html'), htmlTemplate(`${audio ? `<script>${audio}</script>\n` : ''}<script>\n${js}\n</script>`, css));
 }
 
 const options = {

@@ -170,9 +170,10 @@ export class RelicFx {
     q.res = r;
     q.resT = 0;
     const before = run.focusTokens;
-    // 完美 +1 枚代币；普通判定不改变代币；错过清空
-    if (r === 'great') run.focusTokens = Math.min(RELIC.focusMax, run.focusTokens + 1);
-    else if (r === 'miss') run.focusTokens = 0;
+    // 第4.3次调整（续）：普通判定 +1 枚（最多叠到 6 枚）；完美判定 +1 枚，不受数量上限的限制；错过清空
+    if (r === 'great') run.focusTokens += 1;
+    else if (r === 'good') run.focusTokens = Math.max(run.focusTokens, Math.min(RELIC.focusMax, run.focusTokens + 1));
+    else run.focusTokens = 0;
     w.fx.sound(r === 'great' ? 'qteGreat' : r === 'good' ? 'qteGood' : 'qteMiss');
     const p = w.player;
     // 代币数量变化时，头顶跳字

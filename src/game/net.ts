@@ -87,6 +87,8 @@ export interface NetHooks {
   remotes(): Iterable<RemotePlayer>;
   /** 第4.1次调整：本地玩家受到伤害（碰撞伤害由被打的人本地判定）；src = 造成伤害的敌人编号（没有时为 -1） */
   hurt(src: number, dmg: number): void;
+  /** 第4.3次调整：本地玩家受到友伤（其他玩家在他身上显示红色跳字） */
+  ffHurt(dmg: number): void;
   /** 主机：敌人死亡（附击杀者，用于金币分配） */
   enemyKilled(e: Enemy, gold: number, by: number): void;
   /** 主机：敌方投射物（口水 / 石块） */

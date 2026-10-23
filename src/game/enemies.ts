@@ -13,7 +13,6 @@ import { clamp, damp, wrapAngle } from '../util/math';
 import { globalRng } from '../util/rng';
 import type { World } from './world';
 import { randomBullet } from '../data/bullets';
-import { ITEM_IDS, ITEMS } from '../data/items';
 import { RELIC } from '../data/relics';
 import { DMG_BURN, DMG_CORRODE, DMG_EXEC, DMG_GOLD, DMG_PRE, DMG_SLOW, Target } from './net';
 
@@ -29,6 +28,8 @@ export interface DmgSrc {
 
 /** 招财弹：每名玩家每个区域最多触发 4 次必定掉落道具（第4.1次调整） */
 export const GOLD_DROP_MAX = 4;
+/** v4.3.6：任意丧尸被杀死时掉落一件地图道具的概率（2%）；本区每掉落一次，概率减半（2% → 1% → 0.5% …） */
+export const MAP_DROP = { chance: 0.02, decay: 0.5 };
 
 /** 敌人的攻击力（房主与镜像端用同一个公式计算，镜像端用于本地判定碰撞伤害） */
 export function enemyAtk(type: EnemyType, elite: number, cfg: ZoneCfg, diff: Difficulty, mutant: boolean): number {
@@ -149,6 +150,8 @@ export class Enemies {
   private mirrorSeen = new Set<number>();
   /** 招财弹在本区已触发的次数（按玩家） */
   goldDrops = new Map<number, number>();
+  /** 本区丧尸掉落地图道具的当前概率（v4.3.6；由房主或单人时结算，所有人共用） */
+  mapDropP = MAP_DROP.chance;
   /** 黑曜羽毛：累计造成伤害的次数 */
   private featherN = 0;
   private procing = false;
@@ -172,6 +175,7 @@ export class Enemies {
     this.eliteCount = 0;
     this.spawnAcc = 0;
     this.goldDrops.clear();
+    this.mapDropP = MAP_DROP.chance;
     const b = this.w.layout.bounds;
     this.hash.setBounds(b.x0, b.y0, b.x1, b.y1);
   }
@@ -307,7 +311,7 @@ export class Enemies {
       e.speed = MAMBA.speed;
       e.atk = MAMBA.atk * diff.dmg;
     } else {
-      // 第3次调整：每个阶段 24000 生命（4 个阶段）
+      // 第3次调整：4 个阶段；v4.3.7：普通难度每个阶段 24000 生命
       e.r = BOSS.radius;
       e.mass = 40;
       e.maxHp = BOSS.hpPerPhase * BOSS.phases * diff.hp * coop;
@@ -868,6 +872,13 @@ export class Enemies {
     if (e.corrodeT > 0 && !src?.pre) amount *= RELIC.corrodeMul;
     if (src?.execute) amount = Math.max(amount, e.hp);
     if (src?.corrode) e.corrodeT = RELIC.corrodeTime;
+    // v4.3.7：Boss 转阶段后的伤害减免（其他玩家发来的伤害已在他们本地减免过）；一次伤害不会越过下一条阶段分界线
+    const shield = e.type === 'boss' ? w.boss?.shield : undefined;
+    if (shield) {
+      if (!src?.pre) amount *= 1 - shield.dr;
+      amount = shield.clamp(e, amount);
+      if (amount <= 0) return false;
+    }
     const dealt = Math.min(e.hp, amount);
     if (mine) {
       w.run.stats.damageDealt += dealt;
@@ -959,6 +970,7 @@ export class Enemies {
     w.net?.enemyKilled(e, gold, by);
     this.deathFx('creeper', e.x, e.y, e.face, e.elite, by, gold);
     if (e.goldBonus) this.goldDrop(e, by);
+    this.mapDrop(e);
   }
 
   /** 招财弹（第4.1次调整）：被招财弹击杀的丧尸必定掉落一件随机道具（权重与地图道具相同），每名玩家每区最多 4 次 */
@@ -967,10 +979,19 @@ export class Enemies {
     const n = this.goldDrops.get(by) ?? 0;
     if (n >= GOLD_DROP_MAX) return;
     this.goldDrops.set(by, n + 1);
-    const cfg = w.layout.cfg;
-    const id = globalRng.weighted(ITEM_IDS.map((k) => [k, ITEMS[k].weight] as const));
-    const thing = w.pickups.makeItem(id, globalRng, cfg.index, cfg.gunRarityW, cfg.purify);
-    w.pickups.dropThing(thing, e.x, e.y, true);
+    w.pickups.dropThing(w.pickups.randomZoneItem(globalRng), e.x, e.y, true);
+    w.fxAll('sound', 'pickupBig', e.x, e.y, 0.5);
+  }
+
+  /**
+   * v4.3.6：任意丧尸（包括精英、苦力怕与异变体，不包括 Boss 与奇物宝箱）被杀死时，按本区当前的概率掉落一件地图道具，
+   * 掉落一次后概率减半。联机时这件道具和地图道具一样，每名玩家都可以各拿一次。
+   */
+  private mapDrop(e: Enemy): void {
+    if (!globalRng.chance(this.mapDropP)) return;
+    this.mapDropP *= MAP_DROP.decay;
+    const w = this.w;
+    w.pickups.dropMapThing(w.pickups.randomZoneItem(globalRng), e.x, e.y);
     w.fxAll('sound', 'pickupBig', e.x, e.y, 0.5);
   }
 
@@ -1020,6 +1041,7 @@ export class Enemies {
     w.net?.enemyKilled(e, gold, e.lastBy);
     this.deathFx(e.type, e.x, e.y, e.face, e.elite, e.lastBy, gold);
     if (e.goldBonus) this.goldDrop(e, e.lastBy);
+    this.mapDrop(e);
     // 精英有概率掉落子弹（自定）
     if (e.elite > 0) {
       const ch = [0, 0.05, 0.12, 0.25][e.elite];

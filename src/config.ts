@@ -7,7 +7,7 @@ export interface ZoneCfg {
   index: number; // 1..6（5 = 尸王广场，6 = 隐秘核心）
   name: string;
   subtitle: string;
-  hpMul: [number, number]; // 区域倍率（丧尸生命值的额外乘区；第4.3次调整提高了第二区起的倍率）
+  hpMul: [number, number]; // 区域倍率（丧尸生命值的额外乘区；第4.3次调整提高了第二区起的倍率，v4.3.4 又调低了一些）
   weights: Record<EnemyType, number>; // 生成权重（第4次调整：苦力怕在每一区都挤占社畜丧尸 3 点权重）
   elite: [number, number, number]; // 黄/橙/红 变异概率
   eliteMin: number; // 精英最少数量
@@ -59,7 +59,7 @@ export const ZONES: ZoneCfg[] = [
   },
   {
     index: 2, name: '第二区', subtitle: '锈蚀工业带',
-    hpMul: [1.4, 2.4],
+    hpMul: [1.2, 2.2],
     weights: { office: 52, iron: 20, runner: 25, spitter: 0, creeper: 3 },
     elite: [0.099, 0.037, 0.018], eliteMin: 14,
     radRate: 0.2, radThresh: [40, 48, 52],
@@ -74,7 +74,7 @@ export const ZONES: ZoneCfg[] = [
   },
   {
     index: 3, name: '第三区', subtitle: '沉默医院区',
-    hpMul: [2.2, 4.5],
+    hpMul: [1.8, 3.2],
     weights: { office: 42, iron: 20, runner: 25, spitter: 10, creeper: 3 },
     elite: [0.109, 0.047, 0.024], eliteMin: 18,
     radRate: 0.3, radThresh: [80, 96, 104],
@@ -89,7 +89,7 @@ export const ZONES: ZoneCfg[] = [
   },
   {
     index: 4, name: '第四区', subtitle: '血色中枢',
-    hpMul: [3.0, 6.0],
+    hpMul: [2.6, 4.5],
     weights: { office: 32, iron: 20, runner: 25, spitter: 20, creeper: 3 },
     elite: [0.15, 0.06, 0.04], eliteMin: 22,
     radRate: 0.4, radThresh: [120, 144, 156],
@@ -104,7 +104,7 @@ export const ZONES: ZoneCfg[] = [
   },
   {
     index: 5, name: '第五区', subtitle: '尸王广场',
-    hpMul: [4.0, 6.0],
+    hpMul: [3.0, 4.5],
     weights: { office: 32, iron: 20, runner: 25, spitter: 20, creeper: 3 },
     elite: [0.08, 0.03, 0.01], eliteMin: 4,
     // 第3次调整：radThresh 同时是 V 级防护服（4 区安全屋提供）的阈值：黄 0（第五区始终处于黄色级别）/ 橙 200 / 红 240
@@ -121,7 +121,7 @@ export const ZONES: ZoneCfg[] = [
   {
     // 第3次调整：在辐射进入橙色之前击败牢大丧尸才能到达。辐射每秒 +0.6K，阈值与 V 级防护服相同
     index: 6, name: '第六区', subtitle: '隐秘核心',
-    hpMul: [5.0, 6.0],
+    hpMul: [3.0, 6.0],
     weights: { office: 27, iron: 22, runner: 26, spitter: 22, creeper: 3 },
     elite: [0.12, 0.05, 0.025], eliteMin: 8,
     radRate: 0.6, radThresh: [0, 200, 240],
@@ -157,18 +157,21 @@ export const ENEMIES: Record<EnemyType, EnemyDef> = {
 
 /**
  * 苦力怕（第4次调整）：靠近玩家一定范围后、或者生命值归零后，倒计时 2 秒爆炸；
- * 爆炸会殃及丧尸，对丧尸的伤害是对玩家的 5 倍。触发倒计时后移速 4.6 → 3.2。
+ * 爆炸会殃及丧尸，对丧尸的伤害是对玩家的 5 倍。触发倒计时后移速 4.6 → 3.2（第4.3次调整：再降低约 30%，3.2 → 2.2）。
  * 范围与触发距离为自定。
  */
-export const CREEPER = { boom: 34, enemyMul: 5, fuse: 2, fuseSpeed: 3.2, radius: 3.2, trigger: 2.2, nearGold: 17 };
+export const CREEPER = { boom: 34, enemyMul: 5, fuse: 2, fuseSpeed: 2.2, radius: 3.2, trigger: 2.2, nearGold: 17 };
 
 /** 第4次调整：被拉起的玩家获得 4 秒无敌 */
 export const REVIVE_INVULN = 4;
 
-/** 牢大丧尸：第3次调整——每个阶段 24000 生命（共 4 个阶段：3/4 血召唤精英、半血狂暴、1/4 血再次召唤） */
-export const BOSS = { name: '牢大丧尸', hpPerPhase: 24000, phases: 4, atk: 96, speed: 2.4, radius: 1.5 };
-/** 曼巴僵尸（第六区）：24 万生命，攻击力高于牢大（自定 120） */
-export const MAMBA = { name: '曼巴僵尸', hp: 240000, atk: 120, speed: 2.7, radius: 1.75 };
+/**
+ * 牢大丧尸：共 4 个阶段（3/4 血召唤精英、半血狂暴、1/4 血再次召唤）。
+ * v4.3.7：每个阶段 24000 → 30000 生命，普通难度（生命 ×0.8）下正好是每阶段 24000。
+ */
+export const BOSS = { name: '牢大丧尸', hpPerPhase: 30000, phases: 4, atk: 96, speed: 2.4, radius: 1.5 };
+/** 曼巴僵尸（第六区）：攻击力高于牢大（自定 120）。v4.3.7：24 万 → 30 万生命，普通难度下正好是 24 万 */
+export const MAMBA = { name: '曼巴僵尸', hp: 300000, atk: 120, speed: 2.7, radius: 1.75 };
 
 /** 自定：策划案中丧尸移速高于玩家初始移速，直接使用会无法拉扯，这里统一乘以该系数。 */
 export const ENEMY_SPEED_SCALE = 0.58;
@@ -190,12 +193,12 @@ export const PLAYER = {
   contactIFrame: 0.5, // 自定：受击后的短暂无敌，防止被包围瞬间秒杀
 };
 
-/** 第2版联机：丧尸生成时按存活玩家数量额外增加生命值（不包括牢大），下标为人数 */
-export const COOP_HP_MUL = [1, 1, 1.6, 2.2, 2.8];
+/** 第2版联机：丧尸生成时按存活玩家数量额外增加生命值（不包括牢大与曼巴），下标为人数（第4.3次调整：1.6/2.2/2.8 → 1.2/1.4/1.6） */
+export const COOP_HP_MUL = [1, 1, 1.2, 1.4, 1.6];
 /** 第2版联机：牢大丧尸的额外生命值倍率 */
 export const COOP_BOSS_HP_MUL = [1, 1, 2, 3, 4];
 /** 自定：联机时刷怪速率与场上上限的倍率（人越多需要的丧尸越多，否则每人分到的金币太少）。
- * 与生命值倍率相乘后，丧尸的“总血量” ≈ 人数 × 单人时的水平（2人 1.92、3人 3.08、4人 4.48）。 */
+ * 与生命值倍率相乘后，丧尸的“总血量”约为单人时的 2人 1.44、3人 1.96、4人 2.56 倍（第4.3次调整前为 1.92 / 3.08 / 4.48）。 */
 export const COOP_COUNT_MUL = [1, 1, 1.2, 1.4, 1.6];
 export const COOP = {
   maxPlayers: 4,
@@ -204,7 +207,6 @@ export const COOP = {
   reviveRange: 1.8,
   reviveHp: 0.3, // 被拉起后恢复的生命比例
   goldShare: 0.25, // 非击杀者获得的金币比例
-  magnet: 12, // 联机时的金币吸取范围（米）；单人模式为全图
   closeGrace: 5, // 有队友倒在外面时，安全屋关门前的等待时间（自定）
 };
 
@@ -220,6 +222,18 @@ export const CHEST_R = 0.95;
 
 /** 防护服最高等级（第3次调整：4 区安全屋也提供一次升级，最高 V 级） */
 export const SUIT_MAX = 5;
+/**
+ * 第4.3次调整：拿取防护服时按玩家当前的属性补正生命上限与移动速度（下标为防护服等级）。
+ * II 级：生命上限不足 140 提升到 140，移动速度不足 4.5 提升到 4.5（两项分别判定）；
+ * III 级：两项都不足（180 / 5.0）时都提升到该值，只有一项不足时固定 +15 生命上限、+0.2 移动速度；
+ * IV 级：220 / 5.7（分别判定）；V 级没有补正。
+ * 移动速度按基础移动速度计算（含强化血清、商店与天生神力，不含枪械修饰语与临时增益）。
+ */
+export const SUIT_BOOST: Record<number, { hp: number; speed: number; add?: { hp: number; speed: number } }> = {
+  2: { hp: 140, speed: 4.5 },
+  3: { hp: 180, speed: 5.0, add: { hp: 15, speed: 0.2 } },
+  4: { hp: 220, speed: 5.7 },
+};
 /** 第3次调整：枪械参数的硬下限（无论经过多少强化） */
 export const GUN_LIMITS = { delay: 0.05, reload: 0.25 };
 

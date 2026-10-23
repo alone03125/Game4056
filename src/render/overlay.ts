@@ -12,7 +12,17 @@ interface Floater {
   text: string; color: string;
   t: number; life: number;
   big: boolean;
+  size: number; // 字号
   dx: number;
+}
+
+/**
+ * 伤害跳字的文字（第4.3次调整）：不足 1000 时显示 1 位小数；1000 以上不再缩写为 K，
+ * 而是写成带千位分隔符的整数。
+ */
+export function dmgText(amount: number): string {
+  const v = Math.round(amount * 10) / 10;
+  return v >= 1000 ? fmtNum(v) : v.toFixed(1);
 }
 
 export class Overlay {
@@ -41,15 +51,17 @@ export class Overlay {
     this.canvas.style.height = h + 'px';
   }
 
-  damage(x: number, y: number, amount: number, color: string, big: boolean): void {
+  /** hurt：自己受到的伤害，字号稍大；1000 以上的伤害字号更大（第4.3次调整） */
+  damage(x: number, y: number, amount: number, color: string, big: boolean, hurt = false): void {
     if (this.floaters.length > 160) this.floaters.shift();
-    const txt = amount >= 1000 ? (amount / 1000).toFixed(1) + 'K' : amount >= 10 ? Math.round(amount).toString() : amount.toFixed(1);
-    this.floaters.push({ x: x + (Math.random() - 0.5) * 0.6, y, h: 2.1, text: txt, color, t: 0, life: big ? 1.0 : 0.7, big, dx: (Math.random() - 0.5) * 30 });
+    const txt = dmgText(amount);
+    const size = (big ? 24 : hurt ? 16 : 12) + (Math.round(amount * 10) / 10 >= 1000 ? 6 : 0);
+    this.floaters.push({ x: x + (Math.random() - 0.5) * 0.6, y, h: 2.1, text: txt, color, t: 0, life: big ? 1.0 : hurt ? 0.85 : 0.7, big, size, dx: (Math.random() - 0.5) * 30 });
   }
 
   text(x: number, y: number, text: string, color: string): void {
     if (this.floaters.length > 160) this.floaters.shift();
-    this.floaters.push({ x, y, h: 2.6, text, color, t: 0, life: 1.4, big: true, dx: 0 });
+    this.floaters.push({ x, y, h: 2.6, text, color, t: 0, life: 1.4, big: true, size: 24, dx: 0 });
   }
 
   /** 第4.1次调整：1 秒内拾取的金币合并成一个跳字（数值累加，跳字跟着玩家） */
@@ -65,7 +77,7 @@ export class Overlay {
       return;
     }
     if (this.floaters.length > 160) this.floaters.shift();
-    const f: Floater = { x, y, h: 2.6, text: `+${amount}`, color: '#ffd24a', t: 0, life: 1.4, big: true, dx: 0 };
+    const f: Floater = { x, y, h: 2.6, text: `+${amount}`, color: '#ffd24a', t: 0, life: 1.4, big: true, size: 24, dx: 0 };
     this.floaters.push(f);
     this.gold = { f, amount, born: now };
   }
@@ -93,7 +105,7 @@ export class Overlay {
       const rise = f.big ? 46 * k : 34 * k;
       const scale = f.t < 0.08 ? 1 + (0.08 - f.t) * 6 : 1;
       const alpha = k > 0.6 ? 1 - (k - 0.6) / 0.4 : 1;
-      const size = (f.big ? 24 : 12) * scale;
+      const size = f.size * scale;
       g.globalAlpha = alpha;
       g.font = `${size}px ${PIXEL_FONT}`;
       g.lineWidth = 3.5;

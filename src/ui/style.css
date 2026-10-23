@@ -183,6 +183,10 @@ button { font-family: var(--font); }
 .boss-pips { display: flex; gap: 4px; justify-content: center; margin-top: 4px; }
 .boss-pips i { width: 32px; height: 4px; background: rgba(255,106,90,0.18); border: 1px solid rgba(255,106,90,0.5); }
 .boss-pips i.on { background: #ff6a5a; }
+/* v4.3.7：转阶段的伤害减免——生命条下方的小盾与百分比 */
+.boss-shield { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; font-size: 12px; color: #bfe6ff; text-shadow: 0 2px 4px #000; }
+.boss-shield.hidden { display: none; }
+.boss-shield svg { display: block; filter: drop-shadow(0 0 3px rgba(120,200,255,0.7)); }
 .hints { position: absolute; left: 50%; bottom: 150px; transform: translateX(-50%); font-size: 12px; color: var(--dim); text-align: center; padding: 4px 10px; pointer-events: none; background: rgba(10,12,14,0.55); border: none; box-shadow: none; white-space: nowrap; }
 .hints span { margin: 0 6px; }
 .fps { position: absolute; left: 50%; top: 4px; transform: translateX(-50%); font: 12px var(--mono); color: #8a8; pointer-events: none; }

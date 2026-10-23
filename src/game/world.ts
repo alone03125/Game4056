@@ -5,7 +5,7 @@
 // 第4.3次调整：曼巴僵尸倒下后的过场动画（cine）在每个玩家本地播放，期间玩家不能行动、不会受伤；
 // 之后的耐久战里辐射不再扣血（辐射值照常上升）。
 
-import { ZONES, SAFEHOUSE, PLAYER, DIFFICULTY, SUIT_MAX, COOP, REVIVE_INVULN } from '../config';
+import { ZONES, SAFEHOUSE, PLAYER, DIFFICULTY, SUIT_MAX, SUIT_BOOST, COOP, REVIVE_INVULN } from '../config';
 import { itemValue, ITEMS, JAR_VALUE, makeConsumable } from '../data/items';
 import { RELIC } from '../data/relics';
 import { pointInAABB } from '../util/math';
@@ -16,7 +16,7 @@ import { generateZone, nextZoneOrigin, Obstacle, ZoneLayout } from '../world/zon
 import { Boss, BossAI } from './boss';
 import { Mamba, MAMBA_CINE } from './mamba';
 import { Enemies, Enemy } from './enemies';
-import { Fx, SoundName } from './fx';
+import { Fx, SoundName, VO } from './fx';
 import type { NetHooks, RemotePlayer, Target } from './net';
 import { Pickups } from './pickups';
 import { Input, Player } from './player';
@@ -35,6 +35,24 @@ export type PhaseMsg = 'safe' | 'leave' | 'boss' | 'victory' | 'over' | 'door' |
 export const CORE_PURIFY = { perPlayer: 2, power: 14 };
 
 export const SUIT_NAMES = ['', 'I', 'II', 'III', 'IV', 'V'];
+
+/** 防护服的属性补正（第4.3次调整，规则见 SUIT_BOOST）：返回生命上限与移动速度的增量 */
+export function suitBoost(tier: number, maxHp: number, speed: number): { hp: number; speed: number } {
+  const b = SUIT_BOOST[tier];
+  if (!b) return { hp: 0, speed: 0 };
+  const hpLow = maxHp < b.hp - 1e-6, spLow = speed < b.speed - 1e-6;
+  if (b.add) {
+    if (hpLow && spLow) return { hp: b.hp - maxHp, speed: b.speed - speed };
+    return hpLow || spLow ? { ...b.add } : { hp: 0, speed: 0 };
+  }
+  return { hp: hpLow ? b.hp - maxHp : 0, speed: spLow ? b.speed - speed : 0 };
+}
+
+/** v4.3.7：死亡 / Boss 倒下时，原本的音效（约 1.2 秒）播完后再播放音频文件音效 */
+const VOICE_AFTER = 1.25;
+
+/** 防护服的增幅跳字之间的间隔（秒） */
+const FLOAT_GAP = 0.45;
 
 export interface WorldSettings {
   damageNumbers: boolean;
@@ -140,6 +158,10 @@ export class World {
   reviveT = 0;
   spectate = -1;
   suitTakenAt = 0; // 在第几区的安全屋拿过防护服（每个安全屋只能拿一次）
+  /** v4.3.7：Boss 战中受伤的次数（每 2 次播放一次音效） */
+  private bossHurtN = 0;
+  /** 依次弹出的头顶跳字（第4.3次调整：防护服的属性补正） */
+  private floatQ: { t: number; text: string; color: string }[] = [];
   /** 第五区：牢大丧尸已被击败，通往隐秘核心的安全屋已打开 */
   bossCleared = false;
   /** 第4.3次调整：曼巴僵尸倒下后的过场动画 */
@@ -248,9 +270,9 @@ export class World {
     return this.player.standing && !this.arrived && this.phase !== 'safehouse' && this.phase !== 'victory';
   }
 
-  /** 金币吸取范围：单人模式为全图，联机时有一定范围（第2版） */
+  /** 金币吸取范围：全图（第4.3次调整：联机时也改为全图；金币在每个玩家本地各自生成，不会互相抢） */
   goldMagnet(): number {
-    return this.net ? COOP.magnet : Infinity;
+    return Infinity;
   }
 
   newItemUid(): number {
@@ -272,6 +294,7 @@ export class World {
       case 'toast': fx.toast(String(a[0]), String(a[1])); break;
       case 'smoke': fx.smoke(Number(a[0]), Number(a[1]), Number(a[2])); break;
       case 'cine': this.startCine(); break;
+      case 'voice': fx.voice(a.map(Number)); break;
     }
   }
 
@@ -386,6 +409,7 @@ export class World {
     if (run.invulnT > 0) run.invulnT -= dt;
     if (run.overheatT > 0) run.overheatT -= dt;
     if (run.eelT > 0) run.eelT -= dt;
+    if (this.floatQ.length) this.updateFloatQ(dt);
 
     // 第4次调整：安全屋里可以手动开枪试手感（不会伤到队友和自己，也打不到门外的丧尸；自动射击不生效）
     const allowFire = canFire && p.standing && this.phase !== 'victory' && !this.cine;
@@ -413,6 +437,8 @@ export class World {
     }
 
     this.enemies.update(dt);
+    // v4.3.7：Boss 转阶段的伤害减免逐渐消退（镜像端也在本地消退，房主每 0.1 秒同步一次）
+    this.boss?.shield.tick(dt);
     if (this.boss?.mirror) { this.boss.tickTelegraphs(dt); this.boss.mirrorHits(dt); }
     this.projs.update(dt);
     this.pickups.update(dt);
@@ -732,6 +758,7 @@ export class World {
       this.boss = mamba ? new Mamba(this, this.bossEnemy) : new Boss(this, this.bossEnemy);
     }
     this.phase = 'boss';
+    this.bossHurtN = 0;
     if (mamba) this.fx.banner('曼巴僵尸', '隐秘核心的主人', '#c06aff');
     else this.fx.banner('牢大丧尸', '尸潮之王', '#ff4a3a');
     this.events.bossStart();
@@ -778,6 +805,8 @@ export class World {
     if (L.safeRoom) this.setDoor(L.safeRoom.entranceDoor, true);
     this.fx.banner('尸王倒下了', '隐秘核心的大门打开了：进入安全屋，前往第六区', '#c06aff');
     this.fx.sound('victory');
+    // v4.3.7：原本的音效之后依次播放 2、1 号音效
+    this.fx.voice([VO.laugh, VO.years], VOICE_AFTER);
     this.events.coreOpened?.();
   }
 
@@ -796,9 +825,11 @@ export class World {
     p.iframe = PLAYER.contactIFrame;
     p.hurtT = 0.3;
     this.fx.playerHurt(amount);
-    this.fx.damageNumber(p.x, p.y, amount, '#ff4a4a', false);
+    this.fx.damageNumber(p.x, p.y, amount, '#ff4a4a', false, true);
     this.fx.blood(p.x, p.y, 0xaa1010, 6, p.x - sx, p.y - sy);
     if (run.hp <= 0) this.die();
+    // v4.3.7：Boss 战中每受伤 2 次播放一次 2 号音效（还在播放时不重复）
+    else if (this.phase === 'boss' && ++this.bossHurtN % 2 === 0) this.fx.voice([VO.laugh], 0, true);
     return true;
   }
 
@@ -815,7 +846,9 @@ export class World {
     run.hp -= amount;
     run.stats.damageTaken += amount;
     p.hurtT = 0.2;
-    this.fx.damageNumber(p.x, p.y, amount, '#ff9a5a', false);
+    this.fx.damageNumber(p.x, p.y, amount, '#ff9a5a', false, true);
+    // 第4.3次调整：队友那边在你身上显示红色跳字
+    this.net?.ffHurt(amount);
     this.fx.blood(p.x, p.y, 0xaa1010, 3, p.x - sx, p.y - sy);
     if (run.hp <= 0) this.die();
   }
@@ -833,6 +866,12 @@ export class World {
     const p = this.player;
     if (!p.standing) return;
     this.run.hp = 0;
+    // v4.3.7：在 Boss 战中倒下——原本的音效之后依次播放 8、3 号音效；结算标题为“没肘过牢大 / 曼巴”
+    if (this.phase === 'boss') {
+      this.fx.voice([VO.whatCanISay, VO.mambaOut], VOICE_AFTER);
+      // 联机时倒地还可能被拉起：结算标题在全员倒下时（gameOver）再判断
+      if (this.boss && !this.net) this.run.fellIn = this.boss.kind;
+    }
     if (this.net) {
       // 联机：倒地，等待队友拉起
       p.downed = true;
@@ -931,6 +970,8 @@ export class World {
       this.fx.explosion(e.x, e.y, 6, 0xff6a2a);
       this.fx.sound('explosion', e.x, e.y, 1);
     }
+    // v4.3.7：原本的音效之后，牢大倒下依次播放 2、1 号音效，曼巴倒下依次播放 2、3 号音效
+    this.fx.voice(this.layout.index >= 6 ? [VO.laugh, VO.mambaOut] : [VO.laugh, VO.years], VOICE_AFTER);
     this.fx.shake(1.2);
     this.run.stats.zoneTimes.push(this.zoneTime);
     // 其余丧尸一同倒下
@@ -948,6 +989,7 @@ export class World {
   /** 联机：所有玩家都倒下了 */
   private gameOver(): void {
     if (this.phase === 'dead') return;
+    this.run.fellIn = this.phase === 'boss' && this.boss ? this.boss.kind : '';
     this.phase = 'dead';
     this.deathT = 0;
     this.fx.shake(1);
@@ -1028,13 +1070,48 @@ export class World {
   takeSuit(): boolean {
     const t = this.suitOffer();
     if (!t) return false;
-    this.run.suit = t;
+    const run = this.run;
+    run.suit = t;
     this.suitTakenAt = this.safehouseZone;
     const th = ZONES[t - 1].radThresh;
     this.fx.sound('buff');
     this.fx.toast(`换上 ${SUIT_NAMES[t]} 级防护服：辐射阈值 ${th[0]}/${th[1]}/${th[2]}K`, '#7affc0');
     this.fx.floatText(this.player.x, this.player.y, `${SUIT_NAMES[t]} 级防护服`, '#7affc0');
+    // 第4.3次调整：按当前的属性补正生命上限与移动速度，增幅在防护服之后依次弹出
+    const b = suitBoost(t, run.maxHp, run.baseSpeed());
+    const num = (v: number) => String(Number(v.toFixed(2)));
+    if (b.hp > 0) {
+      run.maxHp += b.hp;
+      run.hp += b.hp;
+      this.floatQ.push({ t: FLOAT_GAP, text: `生命上限 +${num(b.hp)}`, color: '#ff6a7a' });
+    }
+    if (b.speed > 0) {
+      run.addBaseSpeed(b.speed);
+      this.floatQ.push({ t: FLOAT_GAP, text: `移动速度 +${num(b.speed)}`, color: '#4affb0' });
+    }
     return true;
+  }
+
+  private updateFloatQ(dt: number): void {
+    const f = this.floatQ[0];
+    f.t -= dt;
+    if (f.t > 0) return;
+    this.floatQ.shift();
+    this.fx.floatText(this.player.x, this.player.y, f.text, f.color);
+  }
+
+  /**
+   * v4.3.7：曼巴倒下后经过的游戏时间（过场动画 + 耐久战），用来让 10 号音乐与耐久战计时同步；不在这段时间里为 -1。
+   * 曼巴在 MAMBA_CINE.total + finalTime 时倒下。
+   */
+  mambaClock(): number {
+    if (this.cine) return this.cine.t;
+    const b = this.boss;
+    if (b?.kind === 'mamba' && b.final) {
+      const t = b.timer();
+      if (t >= 0) return MAMBA_CINE.total + MAMBA_CINE.finalTime - t;
+    }
+    return -1;
   }
 
   /** 医疗箱能回复到的生命值（精研百草：生命上限的 1.5 倍） */

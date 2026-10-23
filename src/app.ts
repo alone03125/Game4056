@@ -213,7 +213,7 @@ export class App {
           }
         }
       },
-      damageNumber: (x, y, amt, color, big) => { if (this.settings.damageNumbers) this.overlay.damage(x, y, amt, color, !!big); },
+      damageNumber: (x, y, amt, color, big, hurt) => { if (this.settings.damageNumbers) this.overlay.damage(x, y, amt, color, !!big, !!hurt); },
       floatText: (x, y, text, color) => this.overlay.text(x, y, text, color),
       goldText: (x, y, amount) => this.overlay.goldText(x, y, amount),
       decal: (x, y, c, s) => r().entities.addDecal(x, y, c, s),
@@ -226,6 +226,7 @@ export class App {
       bagFlash: () => this.hud.bagFlash(),
       banner: (t, s, c) => { if (!silent) this.hud.showBanner(t, s, c); },
       muzzle: () => {},
+      voice: (ids, delay, solo) => { if (!silent) a.voice(ids, delay, solo); },
     };
   }
 
@@ -241,19 +242,45 @@ export class App {
         // 第3次调整：进入安全屋时不再自动弹出商店 / 祭坛面板，可以亲眼看到被堵在门外的丧尸
         this.bag.setOpen(false);
         this.input.releaseFire();
-        this.audio.music?.play('safe');
+        // v4.3.7：击败牢大后 0 号音乐以 40% 音量继续播放，安全屋里不换成程序化音乐
+        if (this.audio.file?.id !== 0) this.audio.music?.play('safe');
       },
-      coreOpened: () => { if (!isMenu) this.audio.music?.play('safe'); },
+      coreOpened: () => {
+        if (isMenu) return;
+        if (this.audio.file?.id === 0) this.audio.file.volume(0.4, 1);
+        else this.audio.music?.play('safe');
+      },
       leaveSafehouse: () => {
         if (isMenu) return;
         this.safe.setOpen(false);
         const z = this.world!.layout.index;
+        // v4.3.7：从隐秘核心前的安全屋出来时，0 号音乐跳到 1:17 并恢复音量
+        const f = this.audio.file;
+        if (f?.id === 0) { f.seek(77); f.volume(1, 0.8); return; }
         this.audio.music?.play('explore', Math.min(4, z));
       },
-      bossStart: () => { if (!isMenu) this.audio.music?.play('boss'); },
-      cine: (on) => { if (!isMenu) this.audio.music?.play(on ? 'none' : 'boss'); },
-      death: () => { if (!isMenu) { this.audio.music?.stinger('death'); this.bag.setOpen(false); } },
-      victory: () => { if (!isMenu) { this.audio.music?.stinger('victory'); this.bag.setOpen(false); } },
+      bossStart: () => {
+        if (isMenu) return;
+        // v4.3.7：Boss 战播放 0 号音乐（淡入）；进入曼巴的 Boss 战时它已经在播放
+        const f = this.audio.file;
+        if (f && (f.id === 0 || f.play(0, { fade: 2.5, loop: true }))) { f.volume(1, 0.5); this.audio.music?.play('none'); }
+        else this.audio.music?.play('boss');
+      },
+      cine: (on) => {
+        if (isMenu) return;
+        const f = this.audio.file;
+        // v4.3.7：曼巴僵尸爬起时快速切换到 10 号音乐（与耐久战计时同步，播完时曼巴倒下）
+        if (on) { this.audio.music?.play('none'); if (!f?.play(10, { fade: 0.35, xfade: 0.6, hold: true })) f?.stop(0.6); }
+        else if (f?.id !== 10) this.audio.music?.play('boss');
+      },
+      death: () => { if (!isMenu) { this.audio.music?.stinger('death'); this.audio.file?.stop(0.8); this.bag.setOpen(false); } },
+      victory: () => {
+        if (isMenu) return;
+        this.audio.music?.stinger('victory');
+        // v4.3.7：击败牢大后 0 号音乐降到 40% 继续播放；10 号音乐此时正好播完
+        if (this.audio.file?.id === 0) this.audio.file.volume(0.4, 1);
+        this.bag.setOpen(false);
+      },
       doorChanged: () => {},
       downed: () => { if (!isMenu) { this.bag.setOpen(false); this.input.releaseFire(); this.hud.hurtFlash(); } },
       spectate: () => { if (!isMenu) { this.bag.setOpen(false); this.safe.setOpen(false); this.audio.music?.stinger('death'); } },
@@ -286,6 +313,7 @@ export class App {
     this.menuWorld = mw;
     this.menuCam = { x: mw.layout.startPos.x, y: mw.layout.startPos.y, t: 0 };
     this.menus.main();
+    this.audio.file?.stop(0.5);
     this.audio.music?.play('menu');
     this.endShown = false;
   }
@@ -384,6 +412,7 @@ export class App {
     this.endShown = false;
     this.hud.show(true);
     this.root.classList.add('ingame');
+    this.audio.file?.stop(0.3);
     this.audio.music?.play('explore', 1);
     this.records.runs++;
     saveRecords(this.records);
@@ -531,6 +560,8 @@ export class App {
    */
   private onVisibility(): void {
     if (this.coop && this.world) this.startBgWorker();
+    // v4.3.7：单人时切到后台游戏会停下，10 号音乐也立即暂停（联机时后台仍在模拟，音乐继续）
+    if (document.hidden && !this.coop) this.audio.file?.hold(true);
     this.updateMute();
   }
 
@@ -591,6 +622,9 @@ export class App {
     if (coop) coop.setLocalPaused((this.state === 'paused' || this.bag.open || this.relicUi.open) && w.phaseActive() && p.alive);
     const paused = this.simPaused();
     const running = coop ? !paused : playing && !paused;
+    // v4.3.7：10 号音乐与曼巴僵尸的耐久战计时同步，游戏暂停时一起暂停，偏差过大时校正
+    this.audio.file?.hold(!running);
+    if (running) this.audio.file?.sync(10, w.mambaClock());
     // 输入 → 世界
     if (render) this.renderer.screenToGround(this.input.mouseX, this.input.mouseY, this.aim);
     if (running) {

@@ -363,13 +363,14 @@ export class Menus {
       h('ul', null,
         h('li', null, '辐射随时间不断上升，不会自然下降。越过橙色、红色阈值后会持续掉血。'),
         h('li', null, '辐射越高，新出现的丧尸越强，拖得越久越危险。'),
-        h('li', null, '安全屋里的防护服柜可以换上更高级的防护服，提高辐射阈值。净化血清可以降低辐射。'),
+        h('li', null, '安全屋里的防护服柜可以换上更高级的防护服，提高辐射阈值；生命上限或移动速度偏低时，换上防护服还会提升这些属性。净化血清可以降低辐射。'),
         h('li', null, '尸王广场的辐射特别强，速战速决。')),
       h('h3', null, '丧尸'),
       h('ul', null,
         h('li', null, '社畜丧尸、头铁丧尸（皮糙肉厚）、跑得快丧尸、吐口水丧尸（会保持距离远程吐口水）。'),
         h('li', null, '苦力怕：靠近你或者被打死后会嘶嘶作响、一边闪白一边膨胀，地面会出现红色的爆炸范围，2 秒后爆炸，连周围的丧尸也一起炸（对丧尸伤害更高）。远远打死它能拿到更多金币。'),
-        h('li', null, '带黄、橙、红光环的是变异精英：更强，掉落更多金币，偶尔还会掉落子弹。')),
+        h('li', null, '带黄、橙、红光环的是变异精英：更强，掉落更多金币，偶尔还会掉落子弹。'),
+        h('li', null, '丧尸被打倒时偶尔会掉落道具，同一个区域里掉落得越多，之后就越难再掉。联机时每个人都能各拿一次。')),
       h('h3', null, '安全屋'),
       h('ul', null,
         h('li', null, '进入即关门：身上的金币和金币罐都会存起来，贵重品可以换一次免费的祭坛加点。走到医疗箱旁按交互键回满生命。'),
@@ -528,13 +529,15 @@ export class Menus {
         '区域任务“击杀异变体”中出现的特殊丧尸，全身散发虹彩光芒，不会消失。可能是除苦力怕以外的任何一种丧尸。');
       zombie(enemyIcon('elite'), ELITE_CSS[2], '变异精英', ELITE_MUL.slice(1).map((v, i) => [['黄色', '橙色', '红色'][i], `生命、攻击 ×${v}`] as [string, string]),
         '脚下带有黄 / 橙 / 红色光环，更强也更值钱，偶尔会掉落子弹。');
-      zombie(enemyIcon('laoda'), '#ff4a3a', BOSS.name, [['生命', `每阶段 ${fmtNum(BOSS.hpPerPhase)}，共 ${BOSS.phases} 阶段`], ['攻击', String(BOSS.atk)]],
+      zombie(enemyIcon('laoda'), '#ff4a3a', BOSS.name, [['生命', `每阶段 ${fmtNum(BOSS.hpPerPhase * DIFFICULTY.normal.hp)}，共 ${BOSS.phases} 阶段`], ['攻击', String(BOSS.atk)]],
         '尸王广场的主人：会蓄力冲刺、连续投掷石块，血量降低时召唤精英丧尸，半血后狂暴。冲刺撞墙会眩晕。');
-      zombie(enemyIcon('mamba'), '#c06aff', MAMBA.name, [['生命', fmtNum(MAMBA.hp)], ['攻击', String(MAMBA.atk)]],
+      zombie(enemyIcon('mamba'), '#c06aff', MAMBA.name, [['生命', fmtNum(MAMBA.hp * DIFFICULTY.normal.hp)], ['攻击', String(MAMBA.atk)]],
         '隐秘核心的主人：旋转激光、近身冲击波、大范围投石，狂暴后连续冲撞，并不断召唤精英丧尸。激光会被柱子挡住。据说它倒下之后还会再爬起来……');
       zombie(enemyIcon('chest'), '#ffd24a', '奇物宝箱', [['生命', CHEST_HP.slice(2).map((v) => fmtNum(v)).join(' / ')]],
         '完成区域任务后，下一个区域会出现奇物宝箱（生命值按第二 ~ 第五区递增）。它不会动也不会攻击，打破后掉落奇物。');
       body.appendChild(grid);
+      body.appendChild(h('p', { style: 'color:#8d939a;margin:8px 0 0' },
+        '两名 Boss 每次转阶段（召唤精英、狂暴）时，都会获得 80% 的伤害减免，之后在约 20 秒内逐渐消退；减免还没消退时再次转阶段，会重新补满。一次伤害也不会直接越过下一个阶段。生命条下方的小盾显示当前的减免。'));
     } else if (tab === 'quest') {
       body.appendChild(h('p', { style: 'color:#8d939a;margin:0 0 8px' }, '第一 ~ 第四区各有一项区域任务，从下面 5 种里抽取 4 种，不会重复。完成任务后，下一个区域会出现奇物宝箱。'));
       const grid = h('div', { class: 'cx-grid' });
@@ -597,7 +600,9 @@ export class Menus {
     // 第3次调整：击败曼巴僵尸为真结局；击败牢大后在隐秘核心倒下仍算通关
     const trueEnd = run.mambaKilled;
     const coreFall = !win && run.laodaKilled;
-    const title = trueEnd ? '真 · 突 围 成 功' : win ? '突 围 成 功' : coreFall ? '倒 在 隐 秘 核 心' : team ? '全 员 倒 下' : '你 倒 下 了';
+    // v4.3.7：结算标题——击败牢大“牢大坠机了”、击败曼巴“曼巴坠机了”；在 Boss 战中倒下“没肘过牢大 / 曼巴”，其他情况“坠机了”
+    const title = trueEnd ? '曼 巴 坠 机 了' : win ? '牢 大 坠 机 了'
+      : run.fellIn === 'mamba' ? '没 肘 过 曼 巴' : run.fellIn === 'laoda' ? '没 肘 过 牢 大' : '坠 机 了';
     const titleColor = trueEnd ? '#ffc83a' : win ? '#ffd24a' : coreFall ? '#c06aff' : '#ff4a3a';
     const sub = trueEnd ? '曼巴僵尸倒下了，隐秘核心归于沉寂。'
       : win ? '尸王倒下了。这座城市终于安静了下来。'

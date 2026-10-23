@@ -46,6 +46,8 @@ export class RunState {
   laodaKilled = false;
   /** 击败了曼巴僵尸（真结局） */
   mambaKilled = false;
+  /** v4.3.7：在哪场 Boss 战中倒下（结算标题“没肘过牢大 / 曼巴”） */
+  fellIn: '' | 'laoda' | 'mamba' = '';
   suit = 1;
   guns: [Gun | null, Gun | null] = [null, null];
   bag: BagItem[] = [];
@@ -108,13 +110,23 @@ export class RunState {
     if (this.has('might')) a += RELIC.mightAtk;
     if (this.has('scepter')) a += Math.min(RELIC.scepterMax, Math.floor((this.gold + this.bank) / RELIC.scepterPer) * RELIC.scepterStep);
     if (this.has('friend')) a += this.friendN * RELIC.friendAtk;
-    if (this.has('focus')) a += (this.focusTokens - 1) * RELIC.focusAtk;
+    if (this.has('focus')) a += this.focusTokens * RELIC.focusAtk - RELIC.focusBaseAtk;
     return a;
   }
 
-  /** 移动速度的奇物倍率（聚精会神：-6%，每枚代币 +6%） */
+  /** 移动速度的奇物倍率（聚精会神：-6%，每枚代币 +5%） */
   focusSpeed(): number {
-    return this.has('focus') ? 1 + (this.focusTokens - 1) * RELIC.focusSpeed : 1;
+    return this.has('focus') ? 1 + this.focusTokens * RELIC.focusSpeed - RELIC.focusBaseSpeed : 1;
+  }
+
+  /** 基础移动速度：含强化血清、商店与天生神力，不含枪械修饰语与临时增益（第4.3次调整：防护服的属性补正） */
+  baseSpeed(): number {
+    return PLAYER.speed * (1 + this.speedPct / 100) * (this.has('might') ? RELIC.mightScale : 1);
+  }
+
+  /** 让基础移动速度增加 v（米/秒） */
+  addBaseSpeed(v: number): void {
+    this.speedPct += (v / (PLAYER.speed * (this.has('might') ? RELIC.mightScale : 1))) * 100;
   }
 
   /** 奇物图标角落显示的数字（友谊地久天长的层数、聚精会神的代币） */
