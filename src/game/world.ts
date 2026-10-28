@@ -140,6 +140,10 @@ export class World {
   victoryT = 0;
   radLevel = 0; // 0 无 1 黄 2 橙 3 红
   corpses: { type: string; x: number; y: number; face: number; t: number; elite: number; side: number }[] = [];
+  /** 真人试玩数据导出：本区内最低的 hp/maxHp，以及本区开始时的击杀/金币快照 */
+  private zoneMinHp = 1;
+  private zoneStartKills = 0;
+  private zoneStartGold = 0;
   private mapRng: Rng;
   bagOpen = false;
   /** 主菜单背景用的世界：没有玩家 */
@@ -227,6 +231,10 @@ export class World {
     this.run.zoneIndex = L.index;
     this.zoneTime = 0;
     this.run.stats.zoneDamage = 0;
+    // 真人试玩数据导出：本区最低血量与击杀/金币起点重新计数
+    this.zoneMinHp = 1;
+    this.zoneStartKills = this.run.stats.kills;
+    this.zoneStartGold = this.run.stats.goldEarned;
     this.zoneStarted = true;
     this.prevDoorClosed = false;
     this.phase = 'explore';
@@ -397,6 +405,15 @@ export class World {
     this.time += dt;
     const run = this.run;
     const p = this.player;
+    // 真人试玩数据导出：全局与本区最低血量、装备过的枪械历史（只记录，不影响任何判定）
+    if (p.alive) {
+      const frac = run.hp / run.maxHp;
+      if (frac < run.stats.minHpFrac) run.stats.minHpFrac = frac;
+      if (frac < this.zoneMinHp) this.zoneMinHp = frac;
+    }
+    for (const g of run.guns) {
+      if (g && !run.gunsEquipped.some((x) => x.uid === g.uid)) run.gunsEquipped.push({ uid: g.uid, name: g.name, model: g.model });
+    }
     if (this.phase === 'explore' || this.phase === 'boss') {
       this.zoneTime += dt;
       run.totalTime += dt;
@@ -514,6 +531,7 @@ export class World {
       const dmg = run.maxHp * pct * dt;
       run.hp -= dmg;
       run.stats.damageTaken += dmg;
+      run.stats.dmgBySource.rad += dmg;
       if (run.hp <= 0) this.die();
     }
   }
@@ -643,6 +661,12 @@ export class World {
     }
     this.setDoor(room.entranceDoor, false);
     run.stats.zoneTimes.push(this.zoneTime);
+    // 真人试玩数据导出：本区快照（用时/击杀增量/金币增量/区内最低血量）
+    run.stats.zoneRecords.push({
+      zone: this.layout.index, time: this.zoneTime,
+      kills: run.stats.kills - this.zoneStartKills, gold: run.stats.goldEarned - this.zoneStartGold,
+      minHp: this.zoneMinHp,
+    });
     // 第3次调整：进入安全屋不再自动回满生命，需要走到医疗箱旁交互
     // 币和换金道具全部暂存
     let banked = run.gold;
@@ -822,6 +846,10 @@ export class World {
     this.net?.hurt(src, amount);
     run.hp -= amount;
     run.stats.damageTaken += amount;
+    // 真人试玩数据导出：伤害来源分类，口径与 tools/sim.ts 一致（便于真人数据和模拟数据对比）
+    if (this.bossEnemy && Math.hypot(this.bossEnemy.x - sx, this.bossEnemy.y - sy) < 3) run.stats.dmgBySource.boss += amount;
+    else if (this.enemies.nearest(sx, sy, 1.5)) run.stats.dmgBySource.contact += amount;
+    else run.stats.dmgBySource.spit += amount;
     p.iframe = PLAYER.contactIFrame;
     p.hurtT = 0.3;
     this.fx.playerHurt(amount);
@@ -845,6 +873,7 @@ export class World {
     if (this.relicFx.blocks()) return;
     run.hp -= amount;
     run.stats.damageTaken += amount;
+    run.stats.dmgBySource.self += amount;
     p.hurtT = 0.2;
     this.fx.damageNumber(p.x, p.y, amount, '#ff9a5a', false, true);
     // 第4.3次调整：队友那边在你身上显示红色跳字
@@ -974,6 +1003,12 @@ export class World {
     this.fx.voice(this.layout.index >= 6 ? [VO.laugh, VO.mambaOut] : [VO.laugh, VO.years], VOICE_AFTER);
     this.fx.shake(1.2);
     this.run.stats.zoneTimes.push(this.zoneTime);
+    // 真人试玩数据导出：Boss 区（最后一区）的快照
+    this.run.stats.zoneRecords.push({
+      zone: this.layout.index, time: this.zoneTime,
+      kills: this.run.stats.kills - this.zoneStartKills, gold: this.run.stats.goldEarned - this.zoneStartGold,
+      minHp: this.zoneMinHp,
+    });
     // 其余丧尸一同倒下
     for (const o of this.enemies.list) {
       if (o.dead || o === e) continue;

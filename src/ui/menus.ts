@@ -12,7 +12,7 @@ import { RELIC_IDS, RELICS } from '../data/relics';
 import { Rng } from '../util/rng';
 import { KEY_ACTIONS, KeyAction, keyLabel, Records, Settings, DEFAULT_KEYS } from '../core/settings';
 import type { LobbyState } from '../net/transport';
-import type { RunState } from '../game/state';
+import type { RunExportMeta, RunState } from '../game/state';
 import { fmtNum, fmtTime } from '../util/math';
 import { clear, h } from './dom';
 import { bulletIcon, gunIcon, itemIcon } from './icons';
@@ -593,7 +593,7 @@ export class Menus {
       h('div', { class: 'actions' }, this.btn('返回', () => this.back(), true))));
   }
 
-  end(win: boolean, run: RunState, onRetry: (() => void) | null, team: TeamLine[] | null = null, retryLabel = '再来一局'): void {
+  end(win: boolean, run: RunState, onRetry: (() => void) | null, team: TeamLine[] | null = null, retryLabel = '再来一局', meta: RunExportMeta = { mode: 'solo', playerCount: 1, isHost: null, source: 'human' }): void {
     const s = run.stats;
     const zc = ZONES[Math.min(ZONES.length, run.zoneIndex) - 1];
     const zoneName = `${zc.name}　${zc.subtitle}`;
@@ -631,12 +631,23 @@ export class Menus {
       zt ? h('div', { style: 'font-size:12px;color:#8d939a;text-align:center' }, zt) : null,
       h('div', { class: 'actions', style: 'justify-content:center' },
         this.btn(team ? '离开房间' : '回到主菜单', () => this.act.quit()),
+        this.btn('导出数据', () => downloadJson(`g4056-${run.seed}-${Date.now()}.json`, run.exportData(win, meta))),
         onRetry ? this.btn(retryLabel, onRetry, true) : team ? h('span', { style: 'color:#8d939a;font-size:12px;align-self:center' }, '等待房主返回房间…') : null)));
   }
 
   showLoading(text: string): void {
     this.showBox('none', h('div', { style: 'font-size:24px;letter-spacing:6px;color:#8d939a' }, text));
   }
+}
+
+/** 真人试玩数据导出：把数据对象序列化成 JSON 文件并触发浏览器下载 */
+function downloadJson(filename: string, data: unknown): void {
+  const url = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
 function parseSeed(s: string): number | null {
