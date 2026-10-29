@@ -1,5 +1,9 @@
 // 无头平衡模拟：用 src/debug/bot.ts 的 AI 自动游玩，统计各区用时/击杀/金币/死亡情况。
 // 用法：npm run sim -- 8 normal    （或 SEED=123 TRACE=1 node tools/sim.cjs 1 normal）
+// 真人试玩数据导出（见 docs/开发流程.md 1.14）：每局结束后额外用 RunState.exportData() 写一份和真人导出完全相同格式
+// 的 JSON 到 analysis/data/，source 标为 'ai'，供 analysis/analyze.py 和真人试玩数据一起对比分析。
+import * as fs from 'fs';
+import * as path from 'path';
 import { RunState } from '../src/game/state';
 import { World } from '../src/game/world';
 import { nullFx } from '../src/game/fx';
@@ -8,6 +12,9 @@ import { Bot } from '../src/debug/bot';
 import { Difficulty } from '../src/config';
 
 interface ZoneRec { zone: number; time: string; kills: number; gold: number; rad: string; maxHp: number; minHp: string; bank: number; dps: string }
+
+const EXPORT_DIR = path.join(__dirname, '..', 'analysis', 'data');
+fs.mkdirSync(EXPORT_DIR, { recursive: true });
 
 function runOne(seed: number, diff: Difficulty) {
   const run = new RunState(seed, diff);
@@ -61,6 +68,9 @@ function runOne(seed: number, diff: Difficulty) {
     }
     if (w.phase === 'dead' || w.phase === 'victory') break;
   }
+  // 真人试玩数据导出：和真人结算画面「导出数据」按钮完全相同的格式，source 标为 'ai'
+  const exported = run.exportData(w.phase === 'victory', { mode: 'solo', playerCount: 1, isHost: null, source: 'ai' });
+  fs.writeFileSync(path.join(EXPORT_DIR, `ai-${seed}-${diff}-${Date.now()}.json`), JSON.stringify(exported, null, 2));
   return {
     seed, result: w.phase, zone: run.zoneIndex, zt: w.zoneTime.toFixed(0), time: run.totalTime.toFixed(0), kills: run.stats.kills,
     bossHp: w.bossEnemy ? Math.round(w.bossEnemy.hp) : null, rad: run.rad.toFixed(1), dps: dps(), alive: w.enemies.list.length,

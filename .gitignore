@@ -12,6 +12,10 @@ assets/fonts/NoitaPixel.ttf
 assets/fonts/pixel4056.ttf
 userPrompt/NoitaPixel.ttf
 
+# 真人试玩数据导出与分析（analysis/README.md）：原始数据与图表都是本地产出，不提交
+analysis/data/
+analysis/output/
+
 # 系统文件
 *.log
 .DS_Store
