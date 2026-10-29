@@ -268,7 +268,7 @@ export class Menus {
       inp.addEventListener('input', () => { s[key] = Number(inp.value); val.textContent = inp.value; apply(); });
       return h('div', { class: 'row' }, h('span', null, label), h('span', { style: 'display:flex;gap:10px;align-items:center' }, inp, val));
     };
-    const toggle = (label: string, key: 'shake' | 'damageNumbers' | 'showFps' | 'hints' | 'autoPause' | 'muteOnBlur') => {
+    const toggle = (label: string, key: 'shake' | 'damageNumbers' | 'showFps' | 'hints' | 'autoPause' | 'muteOnBlur' | 'quickBoss') => {
       const t = h('div', { class: 'toggle' + (s[key] ? ' on' : '') });
       t.addEventListener('click', () => { s[key] = !s[key]; t.classList.toggle('on', s[key]); this.act.sound('click'); apply(); });
       return h('div', { class: 'row' }, h('span', null, label), t);
@@ -314,6 +314,8 @@ export class Menus {
       toggle('操作提示条', 'hints'),
       toggle('窗口失去焦点时自动暂停（仅单人游戏）', 'autoPause'),
       toggle('窗口失去焦点时自动静音', 'muteOnBlur'),
+      // v4.3.9：临时的测试开关
+      toggle('测试：单人开局直接来到第四区之后的安全屋（已存金币 +100 万）', 'quickBoss'),
       h('div', { class: 'actions' }, this.btn('返回', () => { this.rebinding = null; this.back(); }, true))));
   }
 

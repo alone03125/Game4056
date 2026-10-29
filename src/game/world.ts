@@ -970,8 +970,8 @@ export class World {
       this.fx.explosion(e.x, e.y, 6, 0xff6a2a);
       this.fx.sound('explosion', e.x, e.y, 1);
     }
-    // v4.3.7：原本的音效之后，牢大倒下依次播放 2、1 号音效，曼巴倒下依次播放 2、3 号音效
-    this.fx.voice(this.layout.index >= 6 ? [VO.laugh, VO.mambaOut] : [VO.laugh, VO.years], VOICE_AFTER);
+    // v4.3.7：原本的音效之后，牢大倒下依次播放 2、1 号音效；v4.3.8：曼巴倒下依次播放 2、8、3 号音效
+    this.fx.voice(this.layout.index >= 6 ? [VO.laugh, VO.whatCanISay, VO.mambaOut] : [VO.laugh, VO.years], VOICE_AFTER);
     this.fx.shake(1.2);
     this.run.stats.zoneTimes.push(this.zoneTime);
     // 其余丧尸一同倒下
@@ -1102,7 +1102,7 @@ export class World {
 
   /**
    * v4.3.7：曼巴倒下后经过的游戏时间（过场动画 + 耐久战），用来让 10 号音乐与耐久战计时同步；不在这段时间里为 -1。
-   * 曼巴在 MAMBA_CINE.total + finalTime 时倒下。
+   * 曼巴在 MAMBA_CINE.total + finalTime 时再次倒下（v4.3.10：56.2 秒，音乐之后照常播完）。
    */
   mambaClock(): number {
     if (this.cine) return this.cine.t;

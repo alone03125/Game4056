@@ -718,8 +718,8 @@ interface Deck {
   hold: boolean;
 }
 
-/** 播放到这些时间点（秒）时附带的音效：0 号音乐的 1:17 与 2:36 播放 7 号音效 */
-const MUSIC_CUES: Record<number, [number, number][]> = { 0: [[77, 7], [156, 7]] };
+/** 播放到这些时间点（秒）时附带的音效：0 号音乐的 1:27 与 2:37 播放 7 号音效（v4.3.10；之前依次是 1:17 / 2:36、1:22 / 2:41） */
+const MUSIC_CUES: Record<number, [number, number][]> = { 0: [[87, 7], [157, 7]] };
 
 /**
  * Boss 战的音乐：用 <audio> 播放（不必把整首解码进内存），经过 WebAudio 的增益节点调节音量、淡入淡出。

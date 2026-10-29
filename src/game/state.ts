@@ -119,14 +119,14 @@ export class RunState {
     return this.has('focus') ? 1 + this.focusTokens * RELIC.focusSpeed - RELIC.focusBaseSpeed : 1;
   }
 
-  /** 基础移动速度：含强化血清、商店与天生神力，不含枪械修饰语与临时增益（第4.3次调整：防护服的属性补正） */
+  /** 基础移动速度：含强化血清与商店，不含枪械修饰语与临时增益（第4.3次调整：防护服的属性补正） */
   baseSpeed(): number {
-    return PLAYER.speed * (1 + this.speedPct / 100) * (this.has('might') ? RELIC.mightScale : 1);
+    return PLAYER.speed * (1 + this.speedPct / 100);
   }
 
   /** 让基础移动速度增加 v（米/秒） */
   addBaseSpeed(v: number): void {
-    this.speedPct += (v / (PLAYER.speed * (this.has('might') ? RELIC.mightScale : 1))) * 100;
+    this.speedPct += (v / PLAYER.speed) * 100;
   }
 
   /** 奇物图标角落显示的数字（友谊地久天长的层数、聚精会神的代币） */

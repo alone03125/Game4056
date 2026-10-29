@@ -41,6 +41,8 @@ export interface Settings {
   brightness: number; // 第2版：场景整体亮度 50~150%
   keys: Record<KeyAction, string>; // 第2版：键位
   playerName: string; // 联机名字
+  /** v4.3.9（临时）：单人开局直接来到第四区结束后的安全屋，已存金币 +100 万，用来快速测试牢大和曼巴 */
+  quickBoss: boolean;
 }
 
 export const DEFAULT_SETTINGS: Settings = {
@@ -59,6 +61,7 @@ export const DEFAULT_SETTINGS: Settings = {
   brightness: 100,
   keys: { ...DEFAULT_KEYS },
   playerName: '',
+  quickBoss: false,
 };
 
 const KEY = 'g4056.settings.v1';

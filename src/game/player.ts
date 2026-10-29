@@ -72,8 +72,8 @@ export class Player {
     const run = this.w.run;
     // 第3次调整：装备中的枪械修饰语（笨重 -15% / 轻盈 +20%）
     const mod = Math.max(0.2, 1 + gunSpeedMod(run.guns[0]) + gunSpeedMod(run.guns[1]));
-    // 第4.1次调整：奇物——天生神力 +80%，百折不挠（生命低于一半）+9%
-    const relic = (run.has('might') ? RELIC.mightScale : 1) * (run.has('unyield') && run.lowHp() ? 1 + RELIC.unyieldSpeed : 1) * run.focusSpeed();
+    // 第4.1次调整：奇物——百折不挠（生命低于一半）+9%（v4.3.9：天生神力不再提高移速）
+    const relic = (run.has('unyield') && run.lowHp() ? 1 + RELIC.unyieldSpeed : 1) * run.focusSpeed();
     return PLAYER.speed * (1 + run.speedPct / 100) * (run.eelT > 0 ? 2.6 : 1) * mod * relic;
   }
 

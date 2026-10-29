@@ -10,7 +10,7 @@ import { KEY_ACTIONS, KeyAction, keyLabel, loadRecords, loadSettings, Records, s
 import { Bot } from './debug/bot';
 import { Fx, SoundName } from './game/fx';
 import { RunState } from './game/state';
-import { SUIT_NAMES, World, WorldEvents } from './game/world';
+import { SUIT_NAMES, suitBoost, World, WorldEvents } from './game/world';
 import { Coop } from './net/coop';
 import { LobbyState, NetClient, StartInfo } from './net/transport';
 import { SLOT_CSS } from './render/entities';
@@ -318,6 +318,24 @@ export class App {
     this.endShown = false;
   }
 
+  /**
+   * v4.3.9（临时的测试开关）：直接来到第四区结束后的安全屋，已存金币 +100 万，用来快速测试牢大和曼巴。
+   * 防护服按正常流程补到 IV 级（柜子里可以换上 V 级），途中三次防护服的属性补正也一并结算。
+   */
+  private skipToBoss(w: World): void {
+    for (let k = 0; k < 12 && !(w.phase === 'safehouse' && w.layout.index === 5); k++) w.debugAdvance();
+    const run = w.run;
+    for (let t = run.suit + 1; t <= 4; t++) {
+      const b = suitBoost(t, run.maxHp, run.baseSpeed());
+      run.maxHp += b.hp;
+      run.hp += b.hp;
+      if (b.speed > 0) run.addBaseSpeed(b.speed);
+      run.suit = t;
+    }
+    run.bank += 1_000_000;
+    this.hud.toast('测试：已跳到第四区之后的安全屋，已存金币 +100 万', '#ffd24a');
+  }
+
   /** 菜单里的“退出”：联机时离开房间 */
   private quit(): void {
     if (this.net) this.leaveRoom();
@@ -408,6 +426,7 @@ export class App {
     this.coop = coop;
     if (coop) coop.attach(w);
     w.start(Math.max(0, spawnIndex));
+    if (!coop && this.settings.quickBoss) this.skipToBoss(w);
     this.state = 'playing';
     this.endShown = false;
     this.hud.show(true);

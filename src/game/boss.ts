@@ -147,6 +147,15 @@ export function tickTeles(list: Telegraph[], dt: number, e: Enemy): Telegraph[] 
   return list.filter((t) => !t.dead);
 }
 
+/**
+ * v4.3.8：冲刺 / 冲撞 / 冲击波 / 跃起出手的那一刻（蓄力时不播放）：70% 播放 4 号音效，30% 依次播放 2、8 号音效。
+ * 由房主掷骰后广播，所有玩家听到的一样。
+ */
+export function releaseVoice(w: World): void {
+  if (globalRng.chance(0.7)) w.fxAll('voice', VO.man);
+  else w.fxAll('voice', VO.laugh, VO.whatCanISay);
+}
+
 /** 抛出一块石头：落点预警圈 + 抛物线投射物（命中判定由各玩家本地完成） */
 export function throwRock(w: World, e: Enemy, tx: number, ty: number, dmg: number, aoe: number, dur: number, teles: Telegraph[]): void {
   const s: EnemyShot = { x: e.x, y: e.y, vx: 0, vy: 0, dmg, r: 0.6, life: 9, dead: false, kind: 'rock', tx, ty, t: 0, dur, sx: e.x, sy: e.y, aoe };
@@ -323,7 +332,7 @@ export class Boss implements BossAI {
           this.dashHit.clear();
           this.set('dash');
           w.fxAll('sound', 'bossDash', e.x, e.y, 1);
-          w.fxAll('voice', VO.man);
+          releaseVoice(w);
         }
         break;
       }
@@ -360,6 +369,8 @@ export class Boss implements BossAI {
           this.volley = this.enraged ? 6 : 4;
           this.volleyT = 0;
           this.set('barrage');
+          // v4.3.8：投掷石块时播放 8 号音效（每一轮投掷一次）
+          w.fxAll('voice', VO.whatCanISay);
         }
         break;
       }

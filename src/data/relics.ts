@@ -23,7 +23,7 @@ export const RELICS: Record<RelicId, RelicDef> = {
   unyield: { id: 'unyield', name: '百折不挠', glyph: '韧', color: '#ff4a5a', desc: '生命值低于 50% 时，所有枪械的攻击倍率 +0.90x、换弹延迟 -0.09s、射击延迟 -0.09s，移动速度 +9%。' },
   antique: { id: 'antique', name: '老古董', glyph: '古', color: '#d8b06a', desc: '背包里每 1 格金币堆可以放 3500 金币；你击杀的敌人掉落的金币 +100%。' },
   bandage: { id: 'bandage', name: '快速包扎', glyph: '包', color: '#6aff8a', desc: '枪械每次换弹时，回复 4 点生命值。' },
-  might: { id: 'might', name: '天生神力', glyph: '力', color: '#ffb03a', desc: '体型、视野和碰撞范围 +80%；移动速度、生命值和生命上限 +80%；所有枪械的攻击倍率 +0.80x。' },
+  might: { id: 'might', name: '天生神力', glyph: '力', color: '#ffb03a', desc: '体型和碰撞范围 +80%；生命值和生命上限 +80%；所有枪械的攻击倍率 +0.80x。' },
   crit: { id: 'crit', name: '要害一击', glyph: '暴', color: '#ff3a3a', desc: '你的子弹命中时有 10% 的概率暴击，造成 3 倍伤害。暴击命中同一只普通丧尸（不包括精英、异变体、苦力怕和 Boss）3 次时，直接将其击杀。持续伤害不会暴击。' },
   bow: { id: 'bow', name: '沉眠长弓', glyph: '弓', color: '#9ad8ff', desc: '每 6 秒向最近的敌人射出一支箭，造成 250 点伤害。每射出一支，间隔缩短 0.1 秒，最短 0.3 秒。在安全屋里不计时。' },
   knife: { id: 'knife', name: '刺客短刀', glyph: '刃', color: '#e8eef4', desc: '副手武器每射出一发子弹，都会向最近的敌人掷出一把短刀，造成 80 点伤害。' },
@@ -59,6 +59,7 @@ export const RELIC = {
   unyieldHp: 0.5, unyieldAtk: 0.9, unyieldTime: 0.09, unyieldSpeed: 0.09,
   antiqueStack: 3500, antiqueGold: 2,
   bandageHeal: 4,
+  // v4.3.9：天生神力不再提高移动速度、扩大视野（体型、碰撞范围、生命 ×1.8 不变）
   mightScale: 1.8, mightAtk: 0.8,
   // 第4.3次调整：暴击命中同一只普通丧尸 3 次才直接击杀
   critChance: 0.1, critMul: 3, critKills: 3,

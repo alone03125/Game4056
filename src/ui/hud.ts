@@ -399,8 +399,10 @@ export class Hud {
       const timer = B.timer();
       // 第4.3次调整：耐久战中生命条变为红金色的计时条
       this.bossBar.classList.toggle('final', B.final);
-      if (B.final) this.bossName.textContent = `${B.name}（不死）　坚持 ${Math.max(0, timer).toFixed(1)} 秒`;
-      else this.bossName.textContent = `${B.name}${B.enraged ? '（狂暴）' : ''}${phaseText}　${fmtNum(cur)} / ${fmtNum(per)}`;
+      // v4.3.10：只写 Boss 名（“牢大”“曼巴”），不再带“丧尸 / 僵尸”和（狂暴）（不死）
+      const nm = B.name.replace(/(丧尸|僵尸)$/, '');
+      if (B.final) this.bossName.textContent = `${nm}　坚持 ${Math.max(0, timer).toFixed(1)} 秒`;
+      else this.bossName.textContent = `${nm}${phaseText}　${fmtNum(cur)} / ${fmtNum(per)}`;
       this.bossFill.style.width = Math.min(100, (cur / per) * 100) + '%';
       const sigB = `${total}|${phase}`;
       if (sigB !== this.bossSig) {

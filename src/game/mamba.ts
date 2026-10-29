@@ -2,14 +2,14 @@
 // 30 万生命（v4.3.7；普通难度 24 万），攻击力高于牢大丧尸。技能：旋转激光、冲击波（玩家太近时强制击退）、
 // 投石（范围更大的连续投掷）、冲撞（狂暴后连续冲撞），并且每损失 1/5 生命召唤一批精英丧尸。
 // 与牢大一样，AI 只在单人 / 房主处运行，其他玩家处于镜像模式。
-// 第4.3次调整：生命归零时先倒地，过场动画中再次爬起并狂暴，进入耐久战（v4.3.7：36 → 52 秒，配合 10 号音乐）——
+// 第4.3次调整：生命归零时先倒地，过场动画中再次爬起并狂暴，进入耐久战（v4.3.7：36 → 52 秒；v4.3.10：50 秒）——
 // 免疫一切伤害，生命条变为红金色的计时条，并解锁新技能“跃起”（锁定玩家后从天而降）。坚持到计时结束即获胜。
 // v4.3.7：转阶段（4 次召唤与半血狂暴）时获得伤害减免；冲撞、冲击波、跃起、激光与召唤附带音频文件音效。
 
 import { MAMBA } from '../config';
 import { clamp, damp, wrapAngle } from '../util/math';
 import { globalRng } from '../util/rng';
-import { BossAI, decodeTele, MirrorContact, PhaseShield, Telegraph, throwRock, tickTeles } from './boss';
+import { BossAI, decodeTele, MirrorContact, PhaseShield, releaseVoice, Telegraph, throwRock, tickTeles } from './boss';
 import { VO } from './fx';
 import type { Enemy } from './enemies';
 import type { Target } from './net';
@@ -28,9 +28,10 @@ export const MAMBA_STATES: MambaState[] = [
 /**
  * 第4.3次调整：倒地后的过场动画（秒）。down = 倒在地上（心跳声越来越快），rise = 爬起，roar = 怒吼、生命条重新填满。
  * 世界的过场动画（镜头、黑边、音效）与这里的时间一致，total 之后进入耐久战。
- * v4.3.7：耐久战 36 → 52 秒。10 号音乐（58.2 秒）在过场动画开始时响起，6.2 + 52 秒后正好播完，曼巴僵尸同时倒下。
+ * v4.3.7：耐久战 36 → 52 秒。10 号音乐（58.2 秒）在过场动画开始时响起。
+ * v4.3.10：耐久战改为 50 秒，音乐照常播放：曼巴僵尸在 6.2 + 50 = 56.2 秒时倒下，之后音乐再播放约 2 秒到结尾。
  */
-export const MAMBA_CINE = { down: 2.4, rise: 1.5, roar: 2.3, total: 6.2, finalTime: 52 };
+export const MAMBA_CINE = { down: 2.4, rise: 1.5, roar: 2.3, total: 6.2, finalTime: 50 };
 
 /** 技能参数（自定） */
 const SK = {
@@ -389,7 +390,7 @@ export class Mamba implements BossAI {
           this.dashHit.clear();
           this.set('charge');
           w.fxAll('sound', 'bossDash', e.x, e.y, 1);
-          w.fxAll('voice', VO.man);
+          releaseVoice(w);
         }
         break;
       }
@@ -437,6 +438,8 @@ export class Mamba implements BossAI {
           this.volley = this.enraged ? 7 : 5;
           this.volleyT = 0;
           this.set('barrage');
+          // v4.3.8：投掷石块时播放 8 号音效（每一轮投掷一次）
+          w.fxAll('voice', VO.whatCanISay);
         }
         break;
       case 'barrage': {
@@ -507,7 +510,7 @@ export class Mamba implements BossAI {
           this.telegraphs = this.telegraphs.filter((t) => !(t.kind === 'circle' && t.follow));
           this.telegraphs.push({ kind: 'ring', x: e.x, y: e.y, a: 0, len: 0, r: SK.waveRadius, t: 0, dur: 0.45, dead: false });
           w.fxAll('sound', 'bossWave', e.x, e.y, 1);
-          w.fxAll('voice', VO.man);
+          releaseVoice(w);
           w.fxAll('shake', 0.9);
           w.fxAll('smoke', e.x, e.y, 16);
           if (active) {
@@ -589,7 +592,7 @@ export class Mamba implements BossAI {
     this.telegraphs.push(this.leapTele);
     this.set('leap');
     w.fxAll('sound', 'bossDash', e.x, e.y, 1);
-    w.fxAll('voice', VO.man);
+    releaseVoice(w);
     w.fxAll('smoke', e.x, e.y, 14);
     w.fxAll('shake', 0.5);
   }

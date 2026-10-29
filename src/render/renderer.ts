@@ -13,7 +13,6 @@ import { ZoneLayout } from '../world/zone';
 import { EntityView } from './entities';
 import { Particles } from './particles';
 import { QuestView } from './questView';
-import { RELIC } from '../data/relics';
 import { ZoneView } from './zoneView';
 import { ScreenPt } from './overlay';
 import { damp } from '../util/math';
@@ -46,8 +45,6 @@ export class Renderer {
   quests: QuestView;
   quality: Quality;
   zoom = 1;
-  /** 第4.1次调整：天生神力——视野 +80%（平滑过渡） */
-  viewMul = 1;
   shakeAmt = 0;
   /** 第4.3次调整：过场动画时镜头推向曼巴僵尸（0~1） */
   cineK = 0;
@@ -242,12 +239,11 @@ export class Renderer {
     this.shakeAmt = Math.max(0, this.shakeAmt - dt * 2.4);
     const sh = this.shakeAmt * this.shakeAmt * 0.9;
     const sx = (Math.random() - 0.5) * sh, sy = (Math.random() - 0.5) * sh;
-    const vm = w.run.has('might') && !w.showcase ? RELIC.mightScale : 1;
-    this.viewMul += (vm - this.viewMul) * Math.min(1, dt * 2);
+    // v4.3.9：天生神力不再扩大视野
     const cz = 1 - 0.42 * ck;
-    const H = 23 * this.zoom * this.viewMul * cz, D = 12.5 * this.zoom * this.viewMul * cz;
-    if (this.scene.fog instanceof THREE.Fog) { this.scene.fog.near = 34 * this.viewMul; this.scene.fog.far = 82 * this.viewMul; }
-    const far = 220 * Math.max(1, this.viewMul);
+    const H = 23 * this.zoom * cz, D = 12.5 * this.zoom * cz;
+    if (this.scene.fog instanceof THREE.Fog) { this.scene.fog.near = 34; this.scene.fog.far = 82; }
+    const far = 220;
     if (Math.abs(this.camera.far - far) > 1) { this.camera.far = far; this.camera.updateProjectionMatrix(); }
     this.camera.position.set(this.camX + sx, H, -this.camY + D + sy);
     this.camera.lookAt(this.camX + sx * 0.5, 0, -this.camY + sy * 0.5);

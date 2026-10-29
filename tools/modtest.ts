@@ -19,7 +19,7 @@ import { isNormalZombie, MAP_DROP } from '../src/game/enemies';
 import { MemHub } from '../src/net/transport';
 import { itemValue, makeConsumable, rollGrade } from '../src/data/items';
 import { BOSS, CHEST_HP, COOP_HP_MUL, CREEPER, DIFFICULTY, enhanceCoef, MAMBA, PLAYER, ZONES } from '../src/config';
-import { Boss, BOSS_SHIELD } from '../src/game/boss';
+import { Boss, BOSS_SHIELD, releaseVoice } from '../src/game/boss';
 import { Mamba, MAMBA_CINE } from '../src/game/mamba';
 import { QTE, RELIC, RELIC_IDS } from '../src/data/relics';
 import { CORE_PURIFY, suitBoost } from '../src/game/world';
@@ -515,7 +515,7 @@ const tick = (w: World, sec: number, each?: () => void) => { for (let i = 0; i <
   const hp0 = run.maxHp, sp0 = w.player.speed();
   w.relicFx.offer = ['might', 'crit', 'bow'];
   w.relicFx.choose('might');
-  check('天生神力：生命上限 ×1.8、移速 ×1.8、碰撞范围 ×1.8', Math.abs(run.maxHp - hp0 * 1.8) < 1e-6 && Math.abs(w.player.speed() - sp0 * 1.8) < 1e-6 && Math.abs(w.player.r - 0.72) < 1e-9);
+  check('天生神力：生命上限 ×1.8、碰撞范围 ×1.8，移速不变（v4.3.9）', Math.abs(run.maxHp - hp0 * 1.8) < 1e-6 && Math.abs(w.player.speed() - sp0) < 1e-6 && Math.abs(w.player.r - 0.72) < 1e-9);
   check('天生神力：攻击倍率 +0.80x', Math.abs(run.atkBonus() - 0.8) < 1e-9);
   const g = run.guns[0]!;
   const d0 = run.handStats(g, 0).delay;
@@ -877,7 +877,7 @@ function pair(n = 2) {
   check('转阶段减伤 80%，每秒 -4%', BOSS_SHIELD.max === 0.8 && BOSS_SHIELD.decay === 0.04);
   check('普通难度：牢大每阶段 24000、曼巴 240000', BOSS.hpPerPhase * DIFFICULTY.normal.hp === 24000 && MAMBA.hp * DIFFICULTY.normal.hp === 240000);
   check('奇点弹的大小改回 7', BULLETS.singular.rng === 7);
-  check('耐久战 52 秒：6.2 秒过场动画 + 52 秒 = 10 号音乐的 58.2 秒', MAMBA_CINE.finalTime === 52 && Math.abs(MAMBA_CINE.total + MAMBA_CINE.finalTime - 58.2) < 1e-9);
+  check('耐久战 50 秒（v4.3.10）：曼巴在 10 号音乐的 56.2 秒倒下，音乐照常播完', MAMBA_CINE.finalTime === 50 && Math.abs(MAMBA_CINE.total + MAMBA_CINE.finalTime - 56.2) < 1e-9);
   const voices: string[] = [];
   const spy = () => ({ ...nullFx, voice: (ids: number[], d = 0) => { voices.push(ids.join(',') + (d ? '@' + d : '')); } }) as Fx;
   // 牢大
@@ -912,7 +912,19 @@ function pair(n = 2) {
   w.update(1 / 60, true);
   const windV = voices.length;
   for (let i = 0; i < 90 && lb.state !== 'dash'; i++) w.update(1 / 60, true);
-  check('牢大：冲刺释放时播放 4 号音效，蓄力时不播放', windV === 0 && lb.state === 'dash' && voices.includes(String(VO.man)), voices.join(' '));
+  check('牢大：冲刺释放时播放 4 号音效（或依次 2、8 号），蓄力时不播放', windV === 0 && lb.state === 'dash' && (voices.includes(String(VO.man)) || voices.includes(`${VO.laugh},${VO.whatCanISay}`)), voices.join(' '));
+  // v4.3.8：出手音效 70% 为 4 号、30% 为 2、8 号
+  const rel: string[] = [];
+  const wr = freshWorld();
+  wr.fx = { ...nullFx, voice: (ids: number[]) => { rel.push(ids.join(',')); } } as Fx;
+  for (let i = 0; i < 2000; i++) releaseVoice(wr);
+  const p4 = rel.filter((v) => v === String(VO.man)).length / rel.length;
+  check('出手音效：约 70% 为 4 号，其余依次播放 2、8 号', Math.abs(p4 - 0.7) < 0.04 && rel.every((v) => v === String(VO.man) || v === `${VO.laugh},${VO.whatCanISay}`), (p4 * 100).toFixed(1) + '%');
+  // v4.3.8：投掷石块时播放 8 号音效
+  voices.length = 0;
+  (lb as any).set('windThrow');
+  for (let i = 0; i < 40 && lb.state === 'windThrow'; i++) w.update(1 / 60, true);
+  check('牢大：投掷石块时播放 8 号音效', lb.state === 'barrage' && voices.includes(String(VO.whatCanISay)), voices.join(' '));
   // Boss 战中受伤与倒下
   (w as any).__god = false;
   w.phase = 'boss';
@@ -944,7 +956,7 @@ function pair(n = 2) {
   check('曼巴：4 次召唤与半血狂暴，共 5 条阶段分界线', mb.shield.marks.join(',') === '0.8,0.6,0.5,0.4,0.2');
   check('单人普通难度：曼巴总生命 240000', e3.maxHp === 240000, String(e3.maxHp));
   w3.onBossKilled(e3);
-  check('曼巴倒下：依次播放 2、3 号音效', voices.includes(`${VO.laugh},${VO.mambaOut}@1.25`), voices.join(' '));
+  check('曼巴倒下：依次播放 2、8、3 号音效', voices.includes(`${VO.laugh},${VO.whatCanISay},${VO.mambaOut}@1.25`), voices.join(' '));
   // 联机：减伤由房主同步给其他玩家
   const { ws, step } = pair();
   const [host, cli] = ws;
