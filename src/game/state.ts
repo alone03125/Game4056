@@ -20,6 +20,31 @@ export interface RunStats {
   /** 第4.3次调整：当前区域造成的伤害、在区域里战斗的总时间（输出统计） */
   zoneDamage: number;
   fightTime: number;
+  /** 真人试玩数据导出：承受伤害按来源分类（判定口径与 tools/sim.ts 一致，辐射直接打标签不用反推） */
+  dmgBySource: { contact: number; spit: number; boss: number; self: number; rad: number };
+  /** 真人试玩数据导出：全局最低的 hp/maxHp（1 表示从未受伤） */
+  minHpFrac: number;
+  /** 真人试玩数据导出：每区的用时/击杀/金币增量/区内最低血量（与 tools/sim.ts 的 ZoneRec 对应） */
+  zoneRecords: ZoneRecord[];
+}
+
+export interface ZoneRecord { zone: number; time: number; kills: number; gold: number; minHp: number }
+
+/** 真人试玩数据导出：结算元信息（单人/联机、人数、是否房主、AI 模拟还是真人），由 app.ts/tools/sim.ts 在导出时现场拼出 */
+export interface RunExportMeta { mode: 'solo' | 'coop'; playerCount: number; isHost: boolean | null; source: 'ai' | 'human' }
+
+export interface RunExportData {
+  source: 'ai' | 'human';
+  seed: number; difficulty: Difficulty; mode: 'solo' | 'coop'; playerCount: number; isHost: boolean | null;
+  outcome: 'laoda_win' | 'mamba_win' | 'died_laoda' | 'died_mamba' | 'died'; win: boolean;
+  finalZone: number; totalTime: number;
+  kills: number; eliteKills: number; damageDealt: number; damageTaken: number; goldEarned: number;
+  itemsFound: number; shotsFired: number; bestCombo: number;
+  damageBySource: { contact: number; spit: number; boss: number; self: number; rad: number };
+  minHpFrac: number;
+  zones: ZoneRecord[];
+  relics: RelicId[];
+  gunsEquipped: { name: string; model: string }[];
 }
 
 /** 开局武器（数据依然由公式推出；图鉴里也会显示） */
@@ -57,6 +82,8 @@ export class RunState {
   globalAtk = 0;
   /** 第4.1次调整：拥有的奇物增益 */
   relics: RelicId[] = [];
+  /** 真人试玩数据导出：装备过（曾经在手上，不含只在背包里的）的枪，按 uid 去重 */
+  gunsEquipped: { name: string; model: string; uid: number }[] = [];
   /** 当前连杀数（愈战愈勇） */
   combo = 0;
   /** 第4.3次调整：友谊地久天长的层数、聚精会神的专注代币 */
@@ -67,6 +94,7 @@ export class RunState {
   stats: RunStats = {
     kills: 0, eliteKills: 0, damageDealt: 0, damageTaken: 0, goldEarned: 0, itemsFound: 0, shotsFired: 0,
     zoneTimes: [], bestCombo: 0, zoneDamage: 0, fightTime: 0,
+    dmgBySource: { contact: 0, spit: 0, boss: 0, self: 0, rad: 0 }, minHpFrac: 1, zoneRecords: [],
   };
   // 增益
   invulnT = 0;
@@ -210,5 +238,22 @@ export class RunState {
 
   itemName(id: keyof typeof ITEMS): string {
     return ITEMS[id].name;
+  }
+
+  /** 真人试玩数据导出：拼出结算画面「导出数据」按钮要下载的 JSON（纯数据，不依赖 DOM，modtest 可直接调用） */
+  exportData(win: boolean, meta: RunExportMeta): RunExportData {
+    const s = this.stats;
+    const trueEnd = this.mambaKilled;
+    const outcome: RunExportData['outcome'] = trueEnd ? 'mamba_win' : win ? 'laoda_win'
+      : this.fellIn === 'mamba' ? 'died_mamba' : this.fellIn === 'laoda' ? 'died_laoda' : 'died';
+    return {
+      source: meta.source,
+      seed: this.seed, difficulty: this.difficulty, mode: meta.mode, playerCount: meta.playerCount, isHost: meta.isHost,
+      outcome, win, finalZone: this.zoneIndex, totalTime: this.totalTime,
+      kills: s.kills, eliteKills: s.eliteKills, damageDealt: s.damageDealt, damageTaken: s.damageTaken,
+      goldEarned: s.goldEarned, itemsFound: s.itemsFound, shotsFired: s.shotsFired, bestCombo: s.bestCombo,
+      damageBySource: { ...s.dmgBySource }, minHpFrac: s.minHpFrac, zones: s.zoneRecords.map((z) => ({ ...z })),
+      relics: [...this.relics], gunsEquipped: this.gunsEquipped.map(({ name, model }) => ({ name, model })),
+    };
   }
 }

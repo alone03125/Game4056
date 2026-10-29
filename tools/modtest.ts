@@ -977,4 +977,95 @@ function pair(n = 2) {
   step(10);
   check('联机：房主按已减免的伤害结算（不重复减免）', hh0 - he.hp > 150 && hh0 - he.hp < 260, (hh0 - he.hp).toFixed(1));
 }
+
+// 30. 真人试玩数据导出：伤害来源分类、最低血量、每区快照、装备过的槍械
+{
+  const w = freshWorld();
+  const run = w.run;
+  const p = w.player;
+
+  // 接触伤害：命中点附近有丧尸
+  const near = w.enemies.spawn('office', p.x + 1, p.y, 0);
+  w.enemies.hash.rebuild(w.enemies.list);
+  p.iframe = 0; run.invulnT = 0;
+  w.damagePlayer(10, near.x, near.y, near.id);
+  check('导出数据：接触伤害计入 contact 桶', run.stats.dmgBySource.contact === 10 && run.stats.dmgBySource.spit === 0 && run.stats.dmgBySource.boss === 0, JSON.stringify(run.stats.dmgBySource));
+
+  // 远程伤害：命中点附近没有敌人
+  w.enemies.clearAll();
+  p.iframe = 0; run.invulnT = 0;
+  w.damagePlayer(20, p.x + 30, p.y + 30);
+  check('导出数据：命中点附近无敌人时计入 spit 桶', run.stats.dmgBySource.spit === 20, JSON.stringify(run.stats.dmgBySource));
+
+  // Boss 伤害：命中点在 Boss 3 米以内
+  const be = w.enemies.spawnBoss(p.x, p.y + 2, 'laoda');
+  w.bossEnemy = be; w.boss = new Boss(w, be);
+  p.iframe = 0; run.invulnT = 0;
+  w.damagePlayer(30, be.x, be.y, be.id);
+  check('导出数据：Boss 附近命中计入 boss 桶', run.stats.dmgBySource.boss === 30, JSON.stringify(run.stats.dmgBySource));
+
+  // 自伤（友伤）
+  p.ffIframe = 0; run.invulnT = 0;
+  const hpBefore = run.hp;
+  w.friendlyFire(100, p.x, p.y);
+  const selfDmg = hpBefore - run.hp;
+  check('导出数据：友伤计入 self 桶', selfDmg > 0 && Math.abs(run.stats.dmgBySource.self - selfDmg) < 1e-9, `self=${run.stats.dmgBySource.self.toFixed(2)}`);
+
+  // 辐射伤害（独立的世界，避免上面的 Boss / 丧尸干扰判定）
+  const wr = freshWorld();
+  wr.run.rad = 1e9;
+  (wr as any).updateRadiation(1);
+  check('导出数据：辐射伤害计入 rad 桶，且与承受伤害总数一致', wr.run.stats.dmgBySource.rad > 0 && Math.abs(wr.run.stats.dmgBySource.rad - wr.run.stats.damageTaken) < 1e-9, wr.run.stats.dmgBySource.rad.toFixed(2));
+
+  // 最低血量：曾经掉到的最低值要被记住，回血后不会被覆盖
+  const w2 = freshWorld();
+  const run2 = w2.run;
+  w2.update(1 / 60, true);
+  run2.hp = run2.maxHp * 0.2;
+  w2.update(1 / 60, true);
+  run2.hp = run2.maxHp;
+  w2.update(1 / 60, true);
+  check('导出数据：minHpFrac 记住曾经的最低值，不会被之后的回血覆盖', Math.abs(run2.stats.minHpFrac - 0.2) < 1e-6, run2.stats.minHpFrac.toFixed(2));
+
+  // 每区快照：kills/gold 是相对本区开始的增量，minHp 是本区内的最低值
+  const killsBefore = run2.stats.kills, goldBefore = run2.stats.goldEarned;
+  run2.stats.kills = killsBefore + 5;
+  run2.stats.goldEarned = goldBefore + 300;
+  w2.debugAdvance();
+  check('进入安全屋（触发每区快照）', w2.phase === 'safehouse');
+  const zr = run2.stats.zoneRecords[run2.stats.zoneRecords.length - 1];
+  check('导出数据：每区快照的 kills/gold 是本区增量而不是总数', zr.kills === 5 && zr.gold === 300, JSON.stringify(zr));
+  check('导出数据：每区快照记录了本区内的最低血量', Math.abs(zr.minHp - 0.2) < 1e-6, zr.minHp.toFixed(2));
+
+  // 装备过的枪械：开局两把武器已经被记录；新装备的枪会追加，同一把枪换手不会重复
+  check('导出数据：开局武器自动进入 gunsEquipped', run2.gunsEquipped.length === 2, String(run2.gunsEquipped.length));
+  const newGun = makeFixedGun('测试枪', 'T-9', 2, 1, 0.3, 4, 0, 1, new Rng(9));
+  run2.guns[0] = newGun;
+  w2.update(1 / 60, true);
+  check('导出数据：新装备的枪加入 gunsEquipped', run2.gunsEquipped.some((g) => g.uid === newGun.uid));
+  const before = run2.gunsEquipped.length;
+  run2.guns[1] = run2.guns[0]; run2.guns[0] = null;
+  w2.update(1 / 60, true);
+  check('导出数据：同一把枪换手不会重复记录', run2.gunsEquipped.length === before, String(run2.gunsEquipped.length));
+}
+
+// 31. 真人试玩数据导出：exportData() 的结算类型、联机元信息与 AI/真人来源
+{
+  const meta = { mode: 'solo' as const, playerCount: 1, isHost: null, source: 'human' as const };
+  const r1 = new RunState(1, 'normal'); r1.laodaKilled = true;
+  check('exportData：击败牢大、未击败曼巴 → laoda_win', r1.exportData(true, meta).outcome === 'laoda_win');
+  const r2 = new RunState(1, 'normal'); r2.laodaKilled = true; r2.mambaKilled = true;
+  check('exportData：击败曼巴 → mamba_win（真结局优先于 win 参数）', r2.exportData(false, meta).outcome === 'mamba_win');
+  const r3 = new RunState(1, 'normal'); r3.fellIn = 'laoda';
+  check('exportData：在牢大战中阵亡 → died_laoda', r3.exportData(false, meta).outcome === 'died_laoda');
+  const r4 = new RunState(1, 'normal'); r4.fellIn = 'mamba';
+  check('exportData：在曼巴战中阵亡 → died_mamba', r4.exportData(false, meta).outcome === 'died_mamba');
+  const r5 = new RunState(1, 'normal');
+  check('exportData：在普通区域阵亡 → died', r5.exportData(false, meta).outcome === 'died');
+  check('exportData：真人数据标记 source=human', r5.exportData(false, meta).source === 'human');
+  const coopMeta = { mode: 'coop' as const, playerCount: 3, isHost: true, source: 'ai' as const };
+  const d = r5.exportData(false, coopMeta);
+  check('exportData：联机元信息（mode/playerCount/isHost）透传', d.mode === 'coop' && d.playerCount === 3 && d.isHost === true, JSON.stringify(d).slice(0, 80));
+  check('exportData：AI 模拟数据标记 source=ai', d.source === 'ai');
+}
 console.log(fails ? `${fails} 项失败` : '全部通过');

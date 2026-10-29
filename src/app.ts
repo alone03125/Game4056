@@ -916,15 +916,17 @@ export class App {
     r.bestKills = Math.max(r.bestKills, run.stats.kills);
     saveRecords(r);
     const coop = this.coop;
+    // 真人试玩数据导出：单人/联机、人数、是否房主
+    const exportMeta = { mode: (coop ? 'coop' : 'solo') as 'solo' | 'coop', playerCount: coop ? 1 + coop.remoteList().length : 1, isHost: coop ? coop.isHost : null, source: 'human' as const };
     if (coop) {
       const stateOf = (dead: boolean, downed: boolean) => (dead ? '阵亡' : downed ? '倒地' : '存活');
       const team: TeamLine[] = [{ name: `${coop.name(coop.myId)}（你）`, slotColor: SLOT_CSS[coop.myId % 4], kills: run.stats.kills, state: stateOf(!w.player.alive, w.player.downed) }];
       for (const rp of coop.remoteList()) team.push({ name: rp.name, slotColor: SLOT_CSS[rp.slot % 4], kills: rp.kills, state: stateOf(rp.dead, rp.downed) });
       const net = this.net;
-      this.menus.end(win, run, coop.isHost && net ? () => net.reset() : null, team, '返回房间');
+      this.menus.end(win, run, coop.isHost && net ? () => net.reset() : null, team, '返回房间', exportMeta);
       return;
     }
-    this.menus.end(win, run, () => this.startGame(run.difficulty, null));
+    this.menus.end(win, run, () => this.startGame(run.difficulty, null), null, '再来一局', exportMeta);
     if (this.botMode) setTimeout(() => this.startGame(run.difficulty, null), 4000);
   }
 }
